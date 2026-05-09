@@ -1258,8 +1258,8 @@ def render_learnings(db: Database) -> None:
 
     if entries:
         kb_data = [{
-            "Pattern":    e.market_pattern[:45],
-            "Lesson":     e.lesson[:70],
+            "Pattern":    e.market_pattern,
+            "Lesson":     e.lesson,
             "Category":   e.failure_category.value,
             "Confidence": f"{e.confidence:.0%}",
             "Confirmed":  e.times_confirmed,
@@ -1305,7 +1305,7 @@ def render_learnings(db: Database) -> None:
                             "Side":     r.get("side", ""),
                             "P&L":      fmt_pct(float(r.get("pnl_pct", 0))),
                             "Category": r.get("failure_category", ""),
-                            "Lesson":   r.get("lesson", "")[:60],
+                            "Lesson":   r.get("lesson", ""),
                         })
                     except (json.JSONDecodeError, ValueError):
                         pass

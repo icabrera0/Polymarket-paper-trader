@@ -332,12 +332,8 @@ class Orchestrator:
                 )
                 return
 
-            # 1b) Compound drawdown guard (8% — tighter than config alert threshold)
-            if self.compound.drawdown_guard():
-                self._log.warning(
-                    "Compound drawdown guard active (>8%). No new trades this cycle."
-                )
-                return
+            # 1b) Compound drawdown guard — warning only, does not block trades
+            self.compound.drawdown_guard()
 
             # 2) Scan markets
             markets = self.market_scanner.scan()

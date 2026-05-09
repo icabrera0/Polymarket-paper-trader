@@ -245,10 +245,7 @@ class CompoundEngine:
     # =====================================================
 
     def drawdown_guard(self) -> bool:
-        """Returns True if new trades should be blocked (drawdown > 8%).
-
-        Independent of risk.max_drawdown_pct — this is a tighter circuit-breaker.
-        """
+        """Warns when drawdown exceeds threshold. Always returns False (monitoring only)."""
         history = self.db.get_balance_history()
         if not history or len(history) < 2:
             return False
@@ -262,14 +259,13 @@ class CompoundEngine:
         drawdown = (peak - current) / peak
         if drawdown >= DRAWDOWN_GUARD_PCT:
             self._log.warning(
-                "Drawdown guard triggered: peak={:.2f}€, current={:.2f}€, "
+                "Drawdown alert: peak={:.2f}€, current={:.2f}€, "
                 "drawdown={:.1%} >= {:.0%} threshold",
                 peak,
                 current,
                 drawdown,
                 DRAWDOWN_GUARD_PCT,
             )
-            return True
         return False
 
     # =====================================================
