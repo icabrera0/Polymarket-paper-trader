@@ -1,10 +1,10 @@
 """
-Tests del NotificationSystem.
+Tests for the NotificationSystem.
 
-No envía nada a Discord real. Intercepta llamadas HTTP con pytest-mock
-y verifica que los embeds se construyen correctamente.
+Does not send anything to real Discord. Intercepts HTTP calls with pytest-mock
+and verifies that embeds are constructed correctly.
 
-Ejecutar:
+Run:
     pytest tests/test_notification_system.py -v
 """
 
@@ -21,7 +21,7 @@ from src.notification_system import NotificationSystem
 
 @pytest.fixture
 def notifier(config):
-    # Asegurar que el webhook está configurado para los tests
+    # Ensure the webhook is configured for the tests
     config.notifications.discord.enabled = True
     n = NotificationSystem(config)
     n.webhook_url = "https://discord.com/api/webhooks/test/test"
@@ -67,7 +67,7 @@ class TestEmbedConstruction:
 
     def test_trade_open_embed_contiene_precio_y_tamanio(self, notifier):
         pos = make_position()
-        # Capturar el embed que se construiría
+        # Capture the embed that would be built
         embeds_sent = []
         original_send_async = notifier._send_async
 
@@ -154,9 +154,9 @@ class TestDisabledBehavior:
         cfg = config_factory()
         cfg.notifications.discord.enabled = False
         n = NotificationSystem(cfg)
-        # No debe lanzar excepción ni intentar enviar
+        # Must not raise an exception or attempt to send
         pos = make_position()
-        n.notify_trade_open(pos, 150.0)  # Silencioso
+        n.notify_trade_open(pos, 150.0)  # Silent
 
     def test_no_envia_sin_webhook_url(self, config_factory):
         cfg = config_factory()
@@ -164,4 +164,4 @@ class TestDisabledBehavior:
         n = NotificationSystem(cfg)
         n.webhook_url = ""
         pos = make_position()
-        n.notify_trade_open(pos, 150.0)  # Silencioso, no lanza excepción
+        n.notify_trade_open(pos, 150.0)  # Silent, does not raise an exception

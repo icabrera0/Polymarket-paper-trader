@@ -1,17 +1,17 @@
 """
-Verificación e inicialización de Ollama para el bot.
+Ollama verification and initialization for the bot.
 
-Comprueba:
-1. Ollama instalado y servicio corriendo en localhost:11434
-2. Modelo configurado (config.llm.model) descargado; lo descarga si no
-3. Inferencia de prueba para validar que todo funciona
+Checks:
+1. Ollama installed and service running on localhost:11434
+2. Configured model (config.llm.model) downloaded; downloads it if not present
+3. Test inference to validate everything works
 
-Ejecutar UNA SOLA VEZ tras instalar Ollama:
+Run ONCE after installing Ollama:
     python scripts/setup_ollama.py
 
-Si ya tienes Ollama y un modelo descargado, se ejecuta en segundos
-y solo verifica. Si el modelo no está, lanza `ollama pull MODELO`
-internamente (puede tardar varios minutos).
+If you already have Ollama and a downloaded model, it runs in seconds
+and only verifies. If the model is not present, it launches `ollama pull MODEL`
+internally (may take several minutes).
 """
 
 from __future__ import annotations
@@ -32,64 +32,64 @@ def main() -> None:
     config = load_config()
 
     print("─" * 70)
-    print("VERIFICACIÓN DE OLLAMA")
+    print("OLLAMA VERIFICATION")
     print("─" * 70)
 
     if config.llm.provider != "ollama":
-        print(f"\nERROR: provider configurado es '{config.llm.provider}', no 'ollama'.")
-        print("Cambia config/settings.yaml → llm.provider a 'ollama' primero.")
+        print(f"\nERROR: configured provider is '{config.llm.provider}', not 'ollama'.")
+        print("Change config/settings.yaml → llm.provider to 'ollama' first.")
         sys.exit(1)
 
-    print(f"\nServidor:  {config.llm.ollama_base_url}")
-    print(f"Modelo:    {config.llm.model}")
+    print(f"\nServer:  {config.llm.ollama_base_url}")
+    print(f"Model:   {config.llm.model}")
     print()
 
-    # 1) Crear cliente y verificar setup
+    # 1) Create client and verify setup
     client = OllamaClient(config)
     try:
         client.verify_setup()
-        print("✓ Ollama responde y el modelo está descargado.")
+        print("✓ Ollama responds and the model is downloaded.")
     except OllamaUnavailable as exc:
         msg = str(exc)
         print(f"✗ {msg}")
 
-        # Si es porque el modelo no está, ofrecemos descargarlo
+        # If the model is not downloaded, offer to download it
         if "no está descargado" in msg or "not installed" in msg.lower():
             print()
             answer = input(
-                f"¿Descargar '{config.llm.model}' ahora con 'ollama pull'? "
-                f"(puede tardar varios minutos) [s/N]: "
+                f"Download '{config.llm.model}' now with 'ollama pull'? "
+                f"(may take several minutes) [y/N]: "
             ).strip().lower()
             if answer in ("s", "si", "y", "yes"):
-                print(f"\nDescargando {config.llm.model}...")
+                print(f"\nDownloading {config.llm.model}...")
                 result = subprocess.run(
                     ["ollama", "pull", config.llm.model],
                     text=True,
                 )
                 if result.returncode != 0:
-                    print("ERROR: 'ollama pull' falló. Verifica que Ollama está instalado.")
+                    print("ERROR: 'ollama pull' failed. Verify that Ollama is installed.")
                     sys.exit(1)
-                # Reintentar verificación
+                # Retry verification
                 try:
                     client.verify_setup()
-                    print("\n✓ Modelo descargado y disponible.")
+                    print("\n✓ Model downloaded and available.")
                 except OllamaUnavailable as exc2:
-                    print(f"\n✗ Tras descargar sigue fallando: {exc2}")
+                    print(f"\n✗ Still failing after download: {exc2}")
                     sys.exit(1)
             else:
-                print("Cancelado. Descárgalo manualmente con:")
+                print("Cancelled. Download it manually with:")
                 print(f"   ollama pull {config.llm.model}")
                 sys.exit(1)
         else:
             print()
-            print("Ollama no responde. Soluciones:")
-            print("  - Instalar: https://ollama.com/download")
-            print("  - Arrancar el servicio: 'ollama serve'")
-            print("  - Verificar la URL en config/settings.yaml")
+            print("Ollama is not responding. Solutions:")
+            print("  - Install: https://ollama.com/download")
+            print("  - Start the service: 'ollama serve'")
+            print("  - Check the URL in config/settings.yaml")
             sys.exit(1)
 
-    # 2) Inferencia de prueba (rápida)
-    print("\nLanzando inferencia de prueba...")
+    # 2) Test inference (quick)
+    print("\nRunning test inference...")
     try:
         result = client.complete(
             system_prompt="You return JSON only. Nothing else.",
@@ -99,21 +99,21 @@ def main() -> None:
             force_json=True,
         )
     except Exception as exc:
-        print(f"✗ Inferencia falló: {exc}")
+        print(f"✗ Inference failed: {exc}")
         sys.exit(1)
 
-    print(f"  Respuesta cruda: {result['text'][:200]}")
+    print(f"  Raw response: {result['text'][:200]}")
     print(f"  Tokens (in/out): {result['input_tokens']} / {result['output_tokens']}")
     parsed = OllamaClient.extract_json(result["text"])
     if parsed:
-        print(f"  JSON parseado:   {parsed}")
+        print(f"  Parsed JSON:   {parsed}")
     else:
-        print("  ⚠ No se pudo parsear como JSON. El modelo puede no respetar bien")
-        print("    el formato JSON. Considera otro modelo o ajustar el prompt.")
+        print("  ⚠ Could not parse as JSON. The model may not respect the JSON")
+        print("    format well. Consider another model or adjusting the prompt.")
 
     print()
     print("─" * 70)
-    print("Ollama listo. Ya puedes ejecutar:")
+    print("Ollama ready. You can now run:")
     print("   python scripts/test_sentiment_live.py")
     print("─" * 70)
 

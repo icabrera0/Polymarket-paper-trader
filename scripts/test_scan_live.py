@@ -1,11 +1,11 @@
 """
-Prueba en vivo del MarketScanner contra Polymarket.
+Live test of the MarketScanner against Polymarket.
 
-Ejecutar desde la raíz del proyecto:
+Run from the project root:
     python scripts/test_scan_live.py
 
-NO requiere ninguna API key (la Gamma API de Polymarket es pública).
-Sí requiere conexión a Internet.
+Does NOT require any API key (Polymarket's Gamma API is public).
+Does require an Internet connection.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Asegurar que la raíz del proyecto esté en sys.path para poder importar `src`
+# Ensure the project root is in sys.path so we can import `src`
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -26,18 +26,18 @@ def main() -> None:
     config = load_config()
     scanner = MarketScanner(config)
 
-    print("Conectando a Polymarket Gamma API...")
+    print("Connecting to Polymarket Gamma API...")
     markets = scanner.scan(force_refresh=True)
-    print(f"\nEncontrados {len(markets)} mercados operables tras filtros\n")
+    print(f"\nFound {len(markets)} tradeable markets after filters\n")
 
     if not markets:
-        print("(No hay mercados que pasen los filtros actuales)")
-        print("Filtros aplicados:")
+        print("(No markets pass the current filters)")
+        print("Applied filters:")
         f = config.market_filters
-        print(f"  - Volumen 24h mínimo: ${f.min_volume_24h_usd:,.0f}")
-        print(f"  - Spread máximo: {f.max_spread_cents}")
-        print(f"  - Tiempo a cierre: {f.min_time_to_close_hours}h - "
-              f"{f.max_time_to_close_days} días")
+        print(f"  - Min 24h volume: ${f.min_volume_24h_usd:,.0f}")
+        print(f"  - Max spread: {f.max_spread_cents}")
+        print(f"  - Time to close: {f.min_time_to_close_hours}h - "
+              f"{f.max_time_to_close_days} days")
         return
 
     print(f"{'─' * 90}")
@@ -50,15 +50,15 @@ def main() -> None:
         if m.end_date:
             ttc = m.time_to_close_hours
             print(
-                f"    Cierra: {m.end_date.strftime('%Y-%m-%d %H:%M UTC')} "
-                f"(en {ttc:.0f}h)"
+                f"    Closes: {m.end_date.strftime('%Y-%m-%d %H:%M UTC')} "
+                f"(in {ttc:.0f}h)"
             )
         if m.category:
-            print(f"    Categoría: {m.category}")
+            print(f"    Category: {m.category}")
         print()
 
     if len(markets) > 10:
-        print(f"... y {len(markets) - 10} mercados más.")
+        print(f"... and {len(markets) - 10} more markets.")
 
 
 if __name__ == "__main__":

@@ -1,17 +1,17 @@
 """
-Cliente NewsAPI (https://newsapi.org).
+NewsAPI client (https://newsapi.org).
 
-Wrapper sobre la librería oficial `newsapi-python`. Convierte respuestas
-crudas en objetos `NewsArticle` normalizados.
+Wrapper around the official `newsapi-python` library. Converts raw responses
+into normalized `NewsArticle` objects.
 
-Limitaciones del plan gratuito (Developer):
-- 100 requests/día
-- Artículos publicados en el último mes
-- Posible delay de 24h en algunos artículos
+Free plan (Developer) limitations:
+- 100 requests/day
+- Articles published in the last month
+- Possible 24h delay on some articles
 
-El bot consume ~288 requests/día polling cada 5 min, así que el plan gratuito
-NO basta para producción. Está pensado para desarrollo y pruebas. Para 24/7
-operativo hay que pasar al plan de pago o reducir el polling.
+The bot consumes ~288 requests/day polling every 5 min, so the free plan
+is NOT sufficient for production. It is intended for development and testing.
+For 24/7 operation you need to upgrade to a paid plan or reduce polling.
 """
 
 from __future__ import annotations
@@ -26,21 +26,21 @@ from src.models import NewsArticle, NewsSource, _new_article_id
 
 
 class NewsApiClient:
-    """Wrapper sobre newsapi-python que devuelve NewsArticle."""
+    """Wrapper around newsapi-python that returns NewsArticle objects."""
 
     def __init__(self, config: BotConfig) -> None:
         self.config = config
         self.cfg = config.news.newsapi
         self._log = logger.bind(module="newsapi_client")
-        self._client = None  # Se crea perezosamente
+        self._client = None  # Created lazily
 
         if not config.newsapi_key:
             self._log.warning(
-                "NEWSAPI_KEY no está en .env; el cliente está deshabilitado"
+                "NEWSAPI_KEY is not set in .env; the client is disabled"
             )
 
     # =====================================================
-    # Inicialización perezosa del cliente real
+    # Lazy initialization of the real client
     # =====================================================
 
     def _ensure_client(self) -> Any:
@@ -55,12 +55,12 @@ class NewsApiClient:
             return self._client
         except ImportError:
             self._log.error(
-                "newsapi-python no está instalado. pip install newsapi-python"
+                "newsapi-python is not installed. pip install newsapi-python"
             )
             return None
 
     # =====================================================
-    # API pública
+    # Public API
     # =====================================================
 
     def fetch_articles(
@@ -69,11 +69,11 @@ class NewsApiClient:
         max_results: int = 50,
         hours_lookback: int = 1,
     ) -> list[NewsArticle]:
-        """Busca artículos que mencionen alguno de los keywords.
+        """Searches for articles mentioning any of the keywords.
 
-        Construye una query del tipo `"keyword1" OR "keyword2"` (con comillas
-        para frases compuestas). Si hay más de 10 keywords se trunca para no
-        exceder el límite de longitud de URL de NewsAPI.
+        Builds a query of the form `"keyword1" OR "keyword2"` (with quotes
+        for compound phrases). If there are more than 10 keywords it truncates
+        to avoid exceeding the NewsAPI URL length limit.
         """
         client = self._ensure_client()
         if client is None or not keywords:
@@ -88,8 +88,8 @@ class NewsApiClient:
             datetime.now(timezone.utc) - timedelta(hours=hours_lookback)
         ).isoformat(timespec="seconds")
 
-        # NewsAPI espera un único idioma por llamada. Si hay varios configurados,
-        # iteramos.
+        # NewsAPI expects a single language per call. If multiple are configured,
+        # we iterate.
         all_articles: list[NewsArticle] = []
         for lang in self.cfg.languages or ["en"]:
             articles = self._fetch_language(
@@ -102,7 +102,7 @@ class NewsApiClient:
             all_articles.extend(articles)
 
         self._log.info(
-            "NewsAPI: {} artículos en {} idiomas para {} keywords",
+            "NewsAPI: {} articles in {} languages for {} keywords",
             len(all_articles),
             len(self.cfg.languages or ["en"]),
             len(query_kws),
@@ -130,7 +130,7 @@ class NewsApiClient:
                 from_param=from_param,
             )
         except Exception as exc:
-            # newsapi-python puede lanzar varias clases de excepción
+            # newsapi-python can raise several exception classes
             self._log.warning("NewsAPI error ({}): {}", language, exc)
             return []
 
@@ -180,7 +180,7 @@ class NewsApiClient:
                 published_at=published_at,
             )
         except (TypeError, ValueError) as exc:
-            self._log.debug("Artículo NewsAPI mal formado: {}", exc)
+            self._log.debug("Malformed NewsAPI article: {}", exc)
             return None
 
     @staticmethod

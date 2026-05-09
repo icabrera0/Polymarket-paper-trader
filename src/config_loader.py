@@ -1,11 +1,11 @@
 """
-Carga y validación de la configuración del bot.
+Bot configuration loading and validation.
 
-Lee `config/settings.yaml` y `.env`, y los expone como un objeto `BotConfig`
-totalmente validado por Pydantic. Cualquier valor inválido aborta el arranque
-del bot con un error claro, evitando que ejecutemos con parámetros incorrectos.
+Reads `config/settings.yaml` and `.env`, and exposes them as a fully
+Pydantic-validated `BotConfig` object. Any invalid value aborts the bot
+startup with a clear error, preventing execution with incorrect parameters.
 
-Uso típico:
+Typical usage:
     from src.config_loader import load_config, validate_secrets
     config = load_config()
     errors = validate_secrets(config)
@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 # =====================================================
-# Sub-modelos (uno por sección de settings.yaml)
+# Sub-models (one per section of settings.yaml)
 # =====================================================
 
 
@@ -42,7 +42,7 @@ class PaperTradingConfig(BaseModel):
 
 
 class RiskConfig(BaseModel):
-    """Parámetros de gestión de riesgo. Calibrados para 150 € de bankroll."""
+    """Risk management parameters. Calibrated for a 150 EUR bankroll."""
 
     max_position_size_pct: float = Field(gt=0, le=1)
     max_simultaneous_positions: int = Field(gt=0)
@@ -84,11 +84,11 @@ class GdeltConfig(BaseModel):
 
 
 class TelegramConfig(BaseModel):
-    """Lectura de canales públicos de Telegram vía Telethon."""
+    """Reading public Telegram channels via Telethon."""
 
     enabled: bool
     poll_interval_seconds: int = Field(gt=0)
-    channels: list[str] = []                  # Ej: ["@bloomberg", "@reuters"]
+    channels: list[str] = []                  # E.g.: ["@bloomberg", "@reuters"]
     message_lookback_minutes: int = Field(gt=0)
     messages_per_channel: int = Field(gt=0)
 
@@ -111,10 +111,10 @@ class LlmConfig(BaseModel):
     min_confidence_threshold: int = Field(ge=0, le=100)
     cache_analysis: bool
     cache_ttl_seconds: int = Field(gt=0)
-    # Protección de coste (solo aplica a Anthropic)
+    # Cost protection (applies to Anthropic only)
     daily_spend_limit_usd: float = Field(default=5.0, ge=0)
     dry_run: bool = Field(default=False)
-    # Ollama (solo aplica si provider=="ollama")
+    # Ollama (applies only if provider=="ollama")
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_timeout_seconds: int = Field(default=120, gt=0)
     # Parallel LLM workers. >1 requires OLLAMA_NUM_PARALLEL env var set in Ollama.
@@ -134,10 +134,10 @@ class DecisionConfig(BaseModel):
     llm_consultation_threshold: float = Field(gt=0, le=1)
     require_news_for_entry: bool
     reevaluate_open_positions_minutes: int = Field(gt=0)
-    # Cobertura
+    # Coverage
     markets_to_analyze_per_cycle: int = Field(default=15, gt=0)
     category_priority_boost: dict[str, float] = Field(default_factory=dict)
-    # Fallback de búsqueda
+    # Search fallback
     fallback_news_lookback: str = Field(default="7d")
     enable_fallback_search: bool = Field(default=True)
     # Low-info trades
@@ -152,7 +152,7 @@ class DecisionConfig(BaseModel):
 
 
 class SportsInPlayConfig(BaseModel):
-    """Módulo secundario opt-in para apuestas al underdog en partidos en directo."""
+    """Optional opt-in module for underdog betting on live matches."""
 
     enabled: bool = False
     max_positions: int = Field(default=1, gt=0)
@@ -213,7 +213,7 @@ class NotificationsConfig(BaseModel):
 
 
 # =====================================================
-# Modelo raíz
+# Root model
 # =====================================================
 
 
@@ -232,7 +232,7 @@ class BotConfig(BaseModel):
     database: DatabaseConfig
     notifications: NotificationsConfig
 
-    # Secretos cargados desde .env
+    # Secrets loaded from .env
     anthropic_api_key: Optional[str] = None
     newsapi_key: Optional[str] = None
     discord_webhook_url: Optional[str] = None
@@ -254,36 +254,36 @@ def load_config(
     config_path: Optional[Path] = None,
     env_path: Optional[Path] = None,
 ) -> BotConfig:
-    """Carga settings.yaml + .env y devuelve un BotConfig validado.
+    """Loads settings.yaml + .env and returns a validated BotConfig.
 
     Args:
-        config_path: ruta al YAML (por defecto, config/settings.yaml)
-        env_path: ruta al .env (por defecto, .env en la raíz)
+        config_path: path to the YAML file (default: config/settings.yaml)
+        env_path: path to the .env file (default: .env at the project root)
 
     Raises:
-        FileNotFoundError: si el YAML no existe
-        pydantic.ValidationError: si algún valor del YAML es inválido
+        FileNotFoundError: if the YAML file does not exist
+        pydantic.ValidationError: if any value in the YAML is invalid
     """
     config_path = config_path or DEFAULT_CONFIG_PATH
     env_path = env_path or DEFAULT_ENV_PATH
 
     if not config_path.exists():
         raise FileNotFoundError(
-            f"No se encontró el archivo de configuración: {config_path}"
+            f"Configuration file not found: {config_path}"
         )
 
-    # .env es opcional (en tests, por ejemplo)
+    # .env is optional (e.g. in tests)
     if env_path.exists():
         load_dotenv(env_path)
 
     with config_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    # Inyectar secretos desde el entorno
+    # Inject secrets from the environment
     data["anthropic_api_key"] = os.getenv("ANTHROPIC_API_KEY")
     data["newsapi_key"] = os.getenv("NEWSAPI_KEY")
     data["discord_webhook_url"] = os.getenv("DISCORD_WEBHOOK_URL")
-    # Telegram: api_id es int; convertir defensivamente
+    # Telegram: api_id is int; convert defensively
     tg_id = os.getenv("TELEGRAM_API_ID")
     if tg_id and tg_id.strip():
         try:
@@ -297,38 +297,38 @@ def load_config(
 
 
 def validate_secrets(config: BotConfig) -> list[str]:
-    """Comprueba que los secretos obligatorios estén presentes.
+    """Checks that the required secrets are present.
 
-    Devuelve una lista de mensajes de error (vacía si todo está OK).
-    Útil para abortar el arranque con un mensaje claro.
+    Returns a list of error messages (empty if everything is OK).
+    Useful for aborting startup with a clear message.
     """
     errors: list[str] = []
-    # ANTHROPIC_API_KEY solo es obligatoria si provider == "anthropic"
+    # ANTHROPIC_API_KEY is only required if provider == "anthropic"
     if config.llm.provider.lower() == "anthropic" and not config.anthropic_api_key:
         errors.append(
-            "provider='anthropic' pero falta ANTHROPIC_API_KEY en .env"
+            "provider='anthropic' but ANTHROPIC_API_KEY is missing from .env"
         )
     if config.news.newsapi.enabled and not config.newsapi_key:
-        errors.append("NewsAPI está habilitado pero falta NEWSAPI_KEY en .env")
+        errors.append("NewsAPI is enabled but NEWSAPI_KEY is missing from .env")
     if config.notifications.discord.enabled and not config.discord_webhook_url:
         errors.append(
-            "Discord está habilitado pero falta DISCORD_WEBHOOK_URL en .env"
+            "Discord is enabled but DISCORD_WEBHOOK_URL is missing from .env"
         )
     if config.news.telegram.enabled:
         if not config.telegram_api_id or not config.telegram_api_hash:
             errors.append(
-                "Telegram está habilitado pero faltan TELEGRAM_API_ID y/o "
-                "TELEGRAM_API_HASH en .env. Consíguelos gratis en "
+                "Telegram is enabled but TELEGRAM_API_ID and/or "
+                "TELEGRAM_API_HASH are missing from .env. Get them for free at "
                 "https://my.telegram.org → API development tools."
             )
-    # Aviso (no error) si TODAS las fuentes de noticias están deshabilitadas
+    # Warning (not error) if ALL news sources are disabled
     if not (
         config.news.newsapi.enabled
         or config.news.gdelt.enabled
         or config.news.telegram.enabled
     ):
         errors.append(
-            "Ninguna fuente de noticias habilitada. Activa al menos una en "
-            "config/settings.yaml (gdelt no requiere credenciales)."
+            "No news sources are enabled. Enable at least one in "
+            "config/settings.yaml (gdelt does not require credentials)."
         )
     return errors

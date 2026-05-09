@@ -1,14 +1,14 @@
 """
-Fixtures compartidas por todos los tests.
+Fixtures shared by all tests.
 
-Ofrece `build_test_config()` que construye un `BotConfig` válido sin tocar el
-filesystem. Esto desacopla los tests de `config/settings.yaml`: aunque ese
-archivo no exista o cambien sus valores, los tests siguen pasando porque
-controlan exactamente sus inputs.
+Provides `build_test_config()` which builds a valid `BotConfig` without touching the
+filesystem. This decouples the tests from `config/settings.yaml`: even if that
+file does not exist or its values change, the tests keep passing because
+they control their inputs exactly.
 
-Uso desde un test:
+Usage from a test:
 
-    def mi_test(config):              # fixture inyectada
+    def mi_test(config):              # injected fixture
         rm = RiskManager(config)
         ...
 
@@ -49,10 +49,10 @@ def build_test_config(
     risk_overrides: dict[str, Any] | None = None,
     paper_trading_overrides: dict[str, Any] | None = None,
 ) -> BotConfig:
-    """Construye un BotConfig de prueba con valores razonables.
+    """Builds a test BotConfig with reasonable values.
 
-    Reproduce la calibración para 150€ pero permite sobreescribir secciones
-    concretas para tests específicos.
+    Reproduces the calibration for 150€ but allows overriding specific sections
+    for specific tests.
     """
     risk_defaults = {
         "max_position_size_pct": 0.15,
@@ -205,11 +205,11 @@ def build_test_config(
 
 @pytest.fixture
 def config() -> BotConfig:
-    """Configuración de prueba estándar (calibrada para 150€)."""
+    """Standard test configuration (calibrated for 150€)."""
     return build_test_config()
 
 
 @pytest.fixture
 def config_factory() -> Callable[..., BotConfig]:
-    """Factory para construir configs personalizadas en tests específicos."""
+    """Factory for building custom configs in specific tests."""
     return build_test_config

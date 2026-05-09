@@ -1,13 +1,13 @@
 """
-Punto de entrada del Polymarket Paper Trading Bot.
+Entry point for the Polymarket Paper Trading Bot.
 
-Uso:
+Usage:
     python main.py
 
-El bot arranca, ejecuta un ciclo inicial inmediatamente y luego
-trabaja en bucle según los intervalos configurados en settings.yaml.
+The bot starts, runs an initial cycle immediately, and then
+loops according to the intervals configured in settings.yaml.
 
-Para pararlo: Ctrl+C (cierre limpio) o kill -SIGTERM <pid>.
+To stop it: Ctrl+C (clean shutdown) or kill -SIGTERM <pid>.
 """
 
 from src.orchestrator import main

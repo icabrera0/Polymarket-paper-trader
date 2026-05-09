@@ -1,8 +1,8 @@
 """
-Compatibilidad retro: este módulo re-exporta los símbolos del nuevo
-`llm_client.py`. Mantenido para no romper imports antiguos.
+Backwards compatibility: this module re-exports symbols from the new
+`llm_client.py`. Kept to avoid breaking old imports.
 
-Los nuevos módulos deben importar directamente de `src.llm_client`.
+New modules should import directly from `src.llm_client`.
 """
 
 from src.llm_client import (  # noqa: F401

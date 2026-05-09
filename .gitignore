@@ -72,7 +72,7 @@ files/
 Thumbs.db
 desktop.ini
 
-# --- Temporales ---
+# --- Temporary files ---
 *.bak
 *.tmp
 *.old

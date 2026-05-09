@@ -1,29 +1,29 @@
 """
-Backtester — simula el bot sobre mercados de Polymarket ya resueltos.
+Backtester — simulates the bot on already-resolved Polymarket markets.
 
-Flujo:
-1. Descarga mercados resueltos recientes de la Gamma API.
-2. Filtra los que cumplen los mismos filtros del scanner en vivo.
-3. Para cada mercado resuelto:
-   a) Simula el estado "en el momento del análisis" (precio pre-resolución).
-   b) Busca noticias relevantes (GDELT con timespan historical o fresco).
-   c) Analiza con el LLM.
-   d) Si el engine decide OPEN_TRADE, simula la posición:
-      - Entrada al precio que tenía en el momento (simulado).
-      - Salida al precio de resolución (1.0 YES ganó, 0.0 YES perdió).
-   e) Registra el resultado en el informe.
+Flow:
+1. Download recently resolved markets from the Gamma API.
+2. Filter those that pass the same filters as the live scanner.
+3. For each resolved market:
+   a) Simulate the state "at the time of analysis" (pre-resolution price).
+   b) Fetch relevant news (GDELT with historical or fresh timespan).
+   c) Analyze with the LLM.
+   d) If the engine decides OPEN_TRADE, simulate the position:
+      - Entry at the price it had at the time (simulated).
+      - Exit at the resolution price (1.0 YES won, 0.0 YES lost).
+   e) Record the result in the report.
 
-Dos modos:
-  "current"  → Usa noticias de hoy. Los hechos ya son conocidos (Look-ahead bias).
-               Sirve para calibrar el LLM y validar el pipeline, NO para evaluar
-               la estrategia de forma real.
-  "replay"   → Busca noticias en GDELT anteriores al cierre del mercado.
-               Más realista, más lento, más limitado por cobertura de GDELT.
+Two modes:
+  "current"  → Uses today's news. The facts are already known (look-ahead bias).
+               Useful for calibrating the LLM and validating the pipeline, NOT
+               for evaluating the strategy in a realistic way.
+  "replay"   → Fetches news in GDELT before the market's close date.
+               More realistic, slower, more limited by GDELT coverage.
 
-Los resultados se guardan en:
-  - Una DB SQLite temporal (no la de producción).
-  - Un Excel de resultados con la misma estructura que el report diario.
-  - Un resumen en consola.
+Results are saved to:
+  - A temporary SQLite DB (not the production one).
+  - An Excel results file with the same structure as the daily report.
+  - A summary printed to the console.
 """
 
 from __future__ import annotations
@@ -60,19 +60,19 @@ from src.sentiment_analyzer import SentimentAnalyzer
 
 
 # =====================================================
-# Resultado de backtesting
+# Backtesting result
 # =====================================================
 
 
 @dataclass
 class BacktestTrade:
-    """Un trade simulado en el backtest."""
+    """A simulated trade in the backtest."""
 
     market_id: str
     market_question: str
-    resolved_yes: bool            # True si YES ganó (resolución = 1.0)
-    entry_price_simulated: float  # Precio al que entramos simulando
-    exit_price: float             # 1.0 (YES ganó) o 0.0 (YES perdió)
+    resolved_yes: bool            # True if YES won (resolution = 1.0)
+    entry_price_simulated: float  # Price at which we entered (simulated)
+    exit_price: float             # 1.0 (YES won) or 0.0 (YES lost)
     side: TradeSide
     size_eur: float
     pnl_eur: float
@@ -88,7 +88,7 @@ class BacktestTrade:
 
 @dataclass
 class BacktestResult:
-    """Resultado agregado del backtesting."""
+    """Aggregated backtest result."""
 
     mode: str
     start_time: datetime
@@ -107,32 +107,32 @@ class BacktestResult:
     trades: list[BacktestTrade] = field(default_factory=list)
 
     def print_summary(self) -> None:
-        """Imprime un resumen en consola."""
+        """Prints a summary to the console."""
         print()
         print("═" * 65)
-        print("  RESULTADO DE BACKTESTING")
+        print("  BACKTESTING RESULT")
         print("═" * 65)
-        print(f"  Modo:                    {self.mode}")
-        print(f"  Duración del test:       {(self.end_time - self.start_time).seconds}s")
-        print(f"  Mercados analizados:     {self.markets_analyzed}")
-        print(f"  Trades ejecutados:       {self.trades_executed}")
-        print(f"  Trades ganadores:        {self.trades_won}")
-        print(f"  Trades perdedores:       {self.trades_lost}")
+        print(f"  Mode:                    {self.mode}")
+        print(f"  Test duration:           {(self.end_time - self.start_time).seconds}s")
+        print(f"  Markets analyzed:        {self.markets_analyzed}")
+        print(f"  Trades executed:         {self.trades_executed}")
+        print(f"  Winning trades:          {self.trades_won}")
+        print(f"  Losing trades:           {self.trades_lost}")
         print(f"  Win rate:                {self.win_rate:.1%}")
-        print(f"  P&L total:               €{self.total_pnl_eur:+.2f}")
+        print(f"  Total P&L:               €{self.total_pnl_eur:+.2f}")
         if self.trades_executed > 0:
-            print(f"  P&L medio por trade:     €{self.avg_pnl_per_trade:+.2f}")
-        print(f"  Balance inicial:         €{self.initial_balance:.2f}")
-        print(f"  Balance final:           €{self.final_balance:.2f}")
+            print(f"  Average P&L per trade:   €{self.avg_pnl_per_trade:+.2f}")
+        print(f"  Initial balance:         €{self.initial_balance:.2f}")
+        print(f"  Final balance:           €{self.final_balance:.2f}")
         pnl_pct = (self.final_balance - self.initial_balance) / self.initial_balance
-        print(f"  Retorno total:           {pnl_pct:+.2%}")
+        print(f"  Total return:            {pnl_pct:+.2%}")
         print(f"  Max drawdown:            {self.max_drawdown_pct:.2%}")
         if self.sharpe_ratio:
-            print(f"  Sharpe ratio (aprox):    {self.sharpe_ratio:.2f}")
+            print(f"  Sharpe ratio (approx):   {self.sharpe_ratio:.2f}")
         print("═" * 65)
         if self.trades:
             print()
-            print("  Detalle de trades:")
+            print("  Trade detail:")
             for t in self.trades[:20]:
                 icon = "✅" if t.pnl_eur >= 0 else "❌"
                 low = " [LOW]" if t.is_low_info else ""
@@ -141,7 +141,7 @@ class BacktestResult:
                     f"€{t.pnl_eur:+.2f}{low}"
                 )
             if len(self.trades) > 20:
-                print(f"  ... y {len(self.trades) - 20} más")
+                print(f"  ... and {len(self.trades) - 20} more")
         print()
 
 
@@ -151,7 +151,7 @@ class BacktestResult:
 
 
 class Backtester:
-    """Simula el bot sobre mercados resueltos."""
+    """Simulates the bot on resolved markets."""
 
     def __init__(
         self,
@@ -163,25 +163,25 @@ class Backtester:
     ) -> None:
         """
         Args:
-            config: configuración del bot.
-            mode: "current" (noticias de hoy) o "replay" (noticias históricas).
-            max_markets: cuántos mercados resueltos analizar.
-            initial_balance: balance inicial de la simulación.
-            db_path: ruta de DB temporal. Si None, usa un archivo en data/backtest.db.
+            config: bot configuration.
+            mode: "current" (today's news) or "replay" (historical news).
+            max_markets: how many resolved markets to analyze.
+            initial_balance: starting balance for the simulation.
+            db_path: temporary DB path. If None, uses a file in data/backtest.db.
         """
         self.config = config
         self.mode = mode
         self.max_markets = max_markets
         self.initial_balance = initial_balance
 
-        # DB separada de la de producción
+        # Separate DB from production
         self._db_path = db_path or str(
             Path(config.database.path).parent / "backtest.db"
         )
 
         self._log = logger.bind(module="backtester")
         self._log.info(
-            "Backtester inicializado: modo={}, max_markets={}, balance=€{}",
+            "Backtester initialized: mode={}, max_markets={}, balance=€{}",
             mode, max_markets, initial_balance,
         )
 
@@ -190,10 +190,10 @@ class Backtester:
     # =====================================================
 
     def run(self) -> BacktestResult:
-        """Ejecuta el backtest y devuelve el resultado."""
+        """Runs the backtest and returns the result."""
         start_time = _now_utc()
 
-        # Módulos con DB temporal y balance virtual propio
+        # Modules with temporary DB and their own virtual balance
         db = Database(self._db_path)
         risk_manager = RiskManager(self.config, initial_balance_eur=self.initial_balance)
         paper_trader = PaperTrader(self.config, risk_manager, db=db)
@@ -201,10 +201,10 @@ class Backtester:
         sentiment_analyzer = SentimentAnalyzer(self.config)
         decision_engine = DecisionEngine(self.config, risk_manager)
 
-        # 1) Obtener mercados resueltos recientes
-        self._log.info("Descargando mercados resueltos de Polymarket...")
+        # 1) Fetch recently resolved markets
+        self._log.info("Downloading resolved markets from Polymarket...")
         resolved_markets = self._fetch_resolved_markets()
-        self._log.info("Encontrados {} mercados resueltos", len(resolved_markets))
+        self._log.info("Found {} resolved markets", len(resolved_markets))
 
         bt_trades: list[BacktestTrade] = []
         peak_balance = self.initial_balance
@@ -212,26 +212,26 @@ class Backtester:
 
         for i, market_data in enumerate(resolved_markets):
             self._log.debug(
-                "Analizando {}/{}: {}",
+                "Analyzing {}/{}: {}",
                 i + 1, len(resolved_markets),
                 market_data.get("question", "")[:60],
             )
 
-            # Extraer info del mercado resuelto
+            # Extract resolved market info
             snap, resolved_yes = self._parse_resolved_market(market_data)
             if snap is None:
                 continue
 
-            # 2) Buscar noticias
+            # 2) Fetch news
             keywords = self._extract_keywords(snap.question)
             if self.mode == "replay" and snap.end_date:
-                # Calcular timespan aproximado hasta el cierre del mercado
+                # Calculate approximate timespan up to market close
                 days_ago = (
                     _now_utc() - snap.end_date
                 ).days
-                timespan = f"{min(days_ago + 7, 90)}d"  # +7 días de contexto previo
+                timespan = f"{min(days_ago + 7, 90)}d"  # +7 days of prior context
             else:
-                timespan = "7d"  # noticias de la semana (modo current)
+                timespan = "7d"  # week of news (current mode)
 
             articles = news_ingestor.fetch(
                 keywords,
@@ -239,11 +239,11 @@ class Backtester:
                 fallback_timespan=timespan,
             )
 
-            # 3) Analizar
+            # 3) Analyze
             analysis = sentiment_analyzer.analyze(snap, articles, force_refresh=True)
             db.log_analysis(analysis)
 
-            # 4) Decidir
+            # 4) Decide
             decision = decision_engine.decide(
                 analysis=analysis,
                 current_balance_eur=paper_trader.balance_eur,
@@ -252,15 +252,15 @@ class Backtester:
             )
             db.log_decision(decision)
 
-            # 5) Simular P&L con precio de resolución
+            # 5) Simulate P&L with resolution price
             if decision.action == DecisionAction.OPEN_TRADE and decision.side:
-                # Precio de salida = resolución real del mercado
+                # Exit price = actual market resolution
                 if decision.side == TradeSide.BUY_YES:
                     exit_price = 1.0 if resolved_yes else 0.0
                 else:
                     exit_price = 1.0 if not resolved_yes else 0.0
 
-                # Simular: abrir y cerrar inmediatamente con el precio de resolución
+                # Simulate: open and immediately close at the resolution price
                 entry_price = decision.entry_price or snap.yes_price
                 position = paper_trader.execute_decision(decision)
                 if position:
@@ -268,7 +268,7 @@ class Backtester:
                         trade_id=position.trade_id,
                         current_market_price=exit_price,
                         reason=CloseReason.MARKET_RESOLVED,
-                        notes=f"Backtest: mercado resuelto YES={resolved_yes}",
+                        notes=f"Backtest: market resolved YES={resolved_yes}",
                     )
                     if closed:
                         bt_trade = BacktestTrade(
@@ -290,7 +290,7 @@ class Backtester:
                         )
                         bt_trades.append(bt_trade)
 
-                        # Actualizar drawdown
+                        # Update drawdown
                         bal = paper_trader.balance_eur
                         if bal > peak_balance:
                             peak_balance = bal
@@ -318,12 +318,12 @@ class Backtester:
                 )
                 bt_trades.append(bt_trade)
 
-            # Pausa breve entre mercados para no saturar GDELT/Ollama
+            # Brief pause between markets to avoid saturating GDELT/Ollama
             time.sleep(0.5)
 
         db.close()
 
-        # Calcular métricas
+        # Calculate metrics
         actual_trades = [t for t in bt_trades if t.decision == DecisionAction.OPEN_TRADE]
         winners = [t for t in actual_trades if t.pnl_eur > 0]
         losers = [t for t in actual_trades if t.pnl_eur < 0]
@@ -352,11 +352,11 @@ class Backtester:
         )
 
     # =====================================================
-    # Fetching de mercados resueltos
+    # Fetching resolved markets
     # =====================================================
 
     def _fetch_resolved_markets(self) -> list[dict[str, Any]]:
-        """Descarga mercados cerrados/resueltos de la Gamma API."""
+        """Downloads closed/resolved markets from the Gamma API."""
         client = GammaApiClient(self.config)
         try:
             markets = client.fetch_markets(
@@ -367,10 +367,10 @@ class Backtester:
                 limit=min(self.max_markets * 3, 500),
             )
         except Exception as exc:
-            self._log.error("Error descargando mercados resueltos: {}", exc)
+            self._log.error("Error downloading resolved markets: {}", exc)
             return []
 
-        # Filtrar los que realmente están resueltos (tienen un ganador)
+        # Filter those that are truly resolved (have a winner)
         resolved = [
             m for m in markets
             if self._is_truly_resolved(m)
@@ -379,7 +379,7 @@ class Backtester:
 
     @staticmethod
     def _is_truly_resolved(market: dict[str, Any]) -> bool:
-        """Un mercado está resuelto si tiene resultado claro (1.0 / 0.0)."""
+        """A market is resolved if it has a clear outcome (1.0 / 0.0)."""
         prices_raw = market.get("outcomePrices")
         if not prices_raw:
             return False
@@ -389,25 +389,25 @@ class Backtester:
             if not isinstance(prices, list) or len(prices) < 2:
                 return False
             p0, p1 = float(prices[0]), float(prices[1])
-            # Resuelto: uno de los precios debe ser exactamente 1.0 y el otro 0.0
+            # Resolved: one price must be exactly 1.0 and the other 0.0
             return (p0 == 1.0 and p1 == 0.0) or (p0 == 0.0 and p1 == 1.0)
         except (ValueError, TypeError, Exception):
             return False
 
     # =====================================================
-    # Parser de mercados resueltos
+    # Resolved market parser
     # =====================================================
 
     def _parse_resolved_market(
         self, market_data: dict[str, Any]
     ) -> tuple[Optional[MarketSnapshot], bool]:
         """
-        Devuelve (MarketSnapshot_pre_resolución, resolved_yes).
+        Returns (MarketSnapshot_pre_resolution, resolved_yes).
 
-        Para simular el estado "antes de resolver", usamos un precio
-        artificial de 0.50 (máxima incertidumbre). En modo replay podríamos
-        buscar el precio histórico, pero la API pública no lo expone
-        fácilmente. Esto añade ruido pero mantiene el test conservador.
+        To simulate the state "before resolution", we use an
+        artificial price of 0.50 (maximum uncertainty). In replay mode we could
+        look up the historical price, but the public API does not expose it
+        easily. This adds noise but keeps the test conservative.
         """
         import json
 
@@ -415,7 +415,7 @@ class Backtester:
         if not question:
             return None, False
 
-        # Determinar si YES ganó
+        # Determine whether YES won
         prices_raw = market_data.get("outcomePrices", "[]")
         try:
             prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
@@ -433,11 +433,11 @@ class Backtester:
         except (ValueError, TypeError, IndexError):
             return None, False
 
-        # Precio pre-resolución simulado: usamos el precio "opuesto" a la
-        # resolución ajustado por volumen. Si YES ganó con mucho volumen,
-        # asumimos que antes de resolver cotizaba a ~0.70. Si fue sorpresa,
-        # podría ser 0.30. Sin histórico real usamos 0.50 como base.
-        # Esto es una simplificación necesaria dada la disponibilidad de datos.
+        # Simulated pre-resolution price: we use the price "opposite" to the
+        # resolution adjusted by volume. If YES won with high volume,
+        # we assume it was trading at ~0.70 before resolution. If it was a surprise,
+        # it could be 0.30. Without real historical data we use 0.50 as a base.
+        # This is a necessary simplification given data availability.
         simulated_yes_price = 0.50
         simulated_no_price = 0.50
 
@@ -462,7 +462,7 @@ class Backtester:
         return snap, resolved_yes
 
     # =====================================================
-    # Utilidades
+    # Utilities
     # =====================================================
 
     @staticmethod
@@ -506,7 +506,7 @@ class Backtester:
 
     @staticmethod
     def _calculate_sharpe(trades: list[BacktestTrade]) -> float:
-        """Sharpe ratio simplificado sobre los P&L porcentuales de cada trade."""
+        """Simplified Sharpe ratio based on each trade's percentage P&L."""
         if len(trades) < 2:
             return 0.0
         import statistics

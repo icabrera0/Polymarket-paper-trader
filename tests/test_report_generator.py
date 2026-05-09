@@ -1,16 +1,16 @@
 """
-Tests del ReportGenerator.
+Tests for the ReportGenerator.
 
-Verifican que con datos sembrados en una DB temporal:
-- El archivo Excel se genera sin excepciones.
-- Tiene las 5 hojas esperadas.
-- Las hojas tienen el contenido correcto.
-- Los cálculos de KPIs son correctos.
+Verify that with data seeded in a temporary DB:
+- The Excel file is generated without exceptions.
+- It has the 5 expected sheets.
+- The sheets have the correct content.
+- KPI calculations are correct.
 
-No verificamos el detalle de cada celda, solo lo crítico. La validación
-visual completa la harás abriendo el .xlsx generado.
+We do not verify the detail of each cell, only what is critical. Full visual
+validation is done by opening the generated .xlsx file.
 
-Ejecutar:
+Run:
     pytest tests/test_report_generator.py -v
 """
 
@@ -64,11 +64,11 @@ def configured(config_factory, output_dir):
 
 
 def seed_db(db: Database, day: datetime) -> None:
-    """Siembra la DB con datos representativos del día `day`."""
+    """Seeds the DB with representative data for the given `day`."""
     # Balance history
     db.log_balance(150.0, 150.0, 0.0, 0, "INIT")
 
-    # Trade ganador cerrado hoy
+    # Winning trade closed today
     p1 = Position(
         market_question="Will Spain win the Euro 2028?",
         token_id="0xspain",
@@ -87,7 +87,7 @@ def seed_db(db: Database, day: datetime) -> None:
     db.insert_trade(p1)
     db.log_balance(157.5, 157.5, 0.0, 0, "TRADE_CLOSE")
 
-    # Trade perdedor cerrado hoy
+    # Losing trade closed today
     p2 = Position(
         market_question="Will Bitcoin hit 200k?",
         token_id="0xbtc",
@@ -106,7 +106,7 @@ def seed_db(db: Database, day: datetime) -> None:
     db.insert_trade(p2)
     db.log_balance(154.5, 157.5, 0.019, 0, "TRADE_CLOSE")
 
-    # Trade abierto
+    # Open trade
     p3 = Position(
         market_question="Will Trump win 2028?",
         token_id="0xtrump",
@@ -121,7 +121,7 @@ def seed_db(db: Database, day: datetime) -> None:
     db.insert_trade(p3)
     db.log_balance(136.5, 157.5, 0.133, 1, "TRADE_OPEN")
 
-    # Análisis del LLM
+    # LLM analyses
     a1 = MarketAnalysis(
         market_id="m1",
         market_question="Will Spain win the Euro 2028?",
@@ -154,7 +154,7 @@ def seed_db(db: Database, day: datetime) -> None:
     )
     db.log_analysis(a2)
 
-    # Decisiones
+    # Decisions
     d1 = TradeDecision(
         action=DecisionAction.OPEN_TRADE,
         market_id="m1",
@@ -195,7 +195,7 @@ class TestReportGenerator:
 
         assert out_path.exists()
         assert out_path.suffix == ".xlsx"
-        assert out_path.stat().st_size > 1000  # Algo de contenido
+        assert out_path.stat().st_size > 1000  # Some content
 
     def test_excel_tiene_5_hojas(self, configured, db_path):
         db = Database(db_path)
@@ -223,9 +223,9 @@ class TestReportGenerator:
         wb = load_workbook(out_path)
         ws = wb["Resumen Ejecutivo"]
 
-        # El título de la celda A1 debe contener la fecha
+        # The title of cell A1 must contain the date
         assert "Reporte Paper Trading" in str(ws["A1"].value)
-        # Buscar el texto de algún KPI
+        # Search for the text of some KPI
         labels = []
         for row in ws.iter_rows(min_row=1, max_col=1, values_only=True):
             if row[0]:
@@ -243,7 +243,7 @@ class TestReportGenerator:
         wb = load_workbook(out_path)
         ws = wb["Trades Detallados"]
 
-        # 1 cabecera + 3 trades
+        # 1 header + 3 trades
         assert ws.max_row >= 4
 
     def test_analisis_llm_tiene_filas(self, configured, db_path):
@@ -254,7 +254,7 @@ class TestReportGenerator:
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
         ws = wb["Análisis LLM"]
-        assert ws.max_row >= 3  # 1 cabecera + 2 análisis
+        assert ws.max_row >= 3  # 1 header + 2 analyses
 
     def test_decisiones_incluye_no_trade(self, configured, db_path):
         db = Database(db_path)
@@ -264,7 +264,7 @@ class TestReportGenerator:
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
         ws = wb["Decisiones"]
-        # Buscamos que aparezca tanto OPEN_TRADE como NO_TRADE
+        # We look for both OPEN_TRADE and NO_TRADE to appear
         actions = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[1]:
@@ -280,11 +280,11 @@ class TestReportGenerator:
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
         ws = wb["Evolución Balance"]
-        # ws._charts es la lista interna de openpyxl
+        # ws._charts is the internal openpyxl list
         assert len(ws._charts) >= 1
 
     def test_genera_sin_datos_no_crashea(self, configured, db_path):
-        # DB vacía: el report debe generarse sin excepciones (pero vacío)
+        # Empty DB: the report must be generated without exceptions (but empty)
         db = Database(db_path)
         out_path = ReportGenerator(configured, db).generate_daily_report()
         assert out_path.exists()
@@ -292,17 +292,17 @@ class TestReportGenerator:
         assert "Resumen Ejecutivo" in wb.sheetnames
 
     def test_filtra_por_dia_correcto(self, configured, db_path):
-        """Trades de ayer NO deben aparecer en el reporte de hoy."""
+        """Yesterday's trades must NOT appear in today's report."""
         db = Database(db_path)
         today = datetime.now(timezone.utc).replace(hour=12)
         yesterday = today - timedelta(days=1)
 
-        # Sembrar datos de AYER
+        # Seed data from YESTERDAY
         seed_db(db, yesterday)
 
-        # Generar reporte de HOY (debe estar vacío de trades)
+        # Generate TODAY's report (should be empty of trades)
         out_path = ReportGenerator(configured, db).generate_daily_report(today)
         wb = load_workbook(out_path)
         ws = wb["Trades Detallados"]
-        # Solo cabecera, ninguna fila de datos
+        # Only header, no data rows
         assert ws.max_row == 1

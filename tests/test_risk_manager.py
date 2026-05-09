@@ -1,18 +1,18 @@
 """
-Tests del RiskManager.
+Tests for the RiskManager.
 
-Cubren las reglas calibradas para 150 € de bankroll:
-- Validación de tamaño (mín 5 €, máx 15% del balance)
-- Límite de 3 posiciones simultáneas
-- Stop loss a -20% / Take profit a +30%
-- Drawdown máximo 30% → pausa el bot
-- Reanudación manual
+Cover the rules calibrated for a 150 € bankroll:
+- Size validation (min 5 €, max 15% of balance)
+- Limit of 3 simultaneous positions
+- Stop loss at -20% / Take profit at +30%
+- Maximum drawdown 30% → pauses the bot
+- Manual resume
 
-Ejecutar desde la raíz del proyecto:
+Run from the project root:
     pytest tests/test_risk_manager.py -v
 
-La fixture `config` viene de tests/conftest.py y construye un BotConfig de
-prueba programáticamente, sin depender de config/settings.yaml.
+The `config` fixture comes from tests/conftest.py and builds a test BotConfig
+programmatically, without depending on config/settings.yaml.
 """
 
 from __future__ import annotations
@@ -31,14 +31,14 @@ from src.risk_manager import RiskManager
 
 
 # =====================================================
-# Fixtures locales
+# Local fixtures
 # =====================================================
 
 
 @pytest.fixture
 def risk_manager(config):
-    """RiskManager con balance inicial de 150 €. La fixture `config` viene
-    de tests/conftest.py."""
+    """RiskManager with an initial balance of 150 €. The `config` fixture comes
+    from tests/conftest.py."""
     return RiskManager(config, initial_balance_eur=150.0)
 
 
@@ -49,8 +49,8 @@ def make_position(
     stop_loss_price: float = 0.32,
     take_profit_price: float = 0.52,
 ) -> Position:
-    """Helper para construir posiciones de test rápidamente."""
-    size_usd = size_eur * 1.07  # rate del config
+    """Helper to quickly build test positions."""
+    size_usd = size_eur * 1.07  # rate from config
     return Position(
         market_question="Test market?",
         token_id="0xtest",
@@ -67,7 +67,7 @@ def make_position(
 
 
 # =====================================================
-# Validación de trades nuevos
+# New trade validation
 # =====================================================
 
 
@@ -86,14 +86,14 @@ class TestValidateNewTrade:
         result = risk_manager.validate_new_trade(
             proposed_size_eur=15.0,
             current_balance_eur=100.0,
-            open_positions_count=3,  # ya en el límite
+            open_positions_count=3,  # already at the limit
             entry_price=0.50,
         )
         assert result.approved is False
         assert RejectReason.MAX_POSITIONS_REACHED in result.rejection_reasons
 
     def test_rechaza_si_tamano_bajo_minimo(self, risk_manager):
-        # 5 € es el mínimo configurado, 4 € debe fallar
+        # 5 € is the configured minimum, 4 € must fail
         result = risk_manager.validate_new_trade(
             proposed_size_eur=4.0,
             current_balance_eur=150.0,
@@ -113,7 +113,7 @@ class TestValidateNewTrade:
         assert result.approved is True
 
     def test_recorta_si_excede_maximo(self, risk_manager):
-        # 15% de 150 € = 22.5 €. Si pedimos 50 € debe recortar.
+        # 15% of 150 € = 22.5 €. If we request 50 € it should trim.
         result = risk_manager.validate_new_trade(
             proposed_size_eur=50.0,
             current_balance_eur=150.0,
@@ -125,7 +125,7 @@ class TestValidateNewTrade:
         assert len(result.warnings) == 1
 
     def test_rechaza_precio_invalido(self, risk_manager):
-        # Precio fuera de (0, 1)
+        # Price outside (0, 1)
         for bad_price in [0.0, 1.0, -0.1, 1.5]:
             result = risk_manager.validate_new_trade(
                 proposed_size_eur=15.0,
@@ -137,11 +137,11 @@ class TestValidateNewTrade:
             assert RejectReason.INVALID_PRICE in result.rejection_reasons
 
     def test_rechaza_si_balance_insuficiente(self, risk_manager):
-        # Balance bajo, pedimos algo que el max_position_size permite pero el
-        # balance no cubre.
+        # Low balance, we request something the max_position_size allows but
+        # the balance does not cover.
         result = risk_manager.validate_new_trade(
             proposed_size_eur=10.0,
-            current_balance_eur=8.0,  # menor que el size pedido
+            current_balance_eur=8.0,  # less than the requested size
             open_positions_count=0,
             entry_price=0.50,
         )
@@ -149,9 +149,9 @@ class TestValidateNewTrade:
         assert RejectReason.INSUFFICIENT_BALANCE in result.rejection_reasons
 
     def test_rechaza_si_bot_pausado(self, risk_manager):
-        # Forzar pausa simulando un drawdown grande
-        risk_manager.update_balance_and_check_drawdown(100.0)  # peak 150, ahora 100
-        # 100/150 = 33% drawdown, supera el 30%
+        # Force pause by simulating a large drawdown
+        risk_manager.update_balance_and_check_drawdown(100.0)  # peak 150, now 100
+        # 100/150 = 33% drawdown, exceeds 30%
         assert risk_manager.is_paused is True
 
         result = risk_manager.validate_new_trade(
@@ -165,34 +165,34 @@ class TestValidateNewTrade:
 
 
 # =====================================================
-# Cálculos de tamaño y niveles
+# Size and level calculations
 # =====================================================
 
 
 class TestCalculations:
     def test_max_position_size(self, risk_manager):
-        # 15% de 150 € = 22.5 €
+        # 15% of 150 € = 22.5 €
         assert risk_manager.calculate_max_position_size(150.0) == pytest.approx(22.5)
-        # 15% de 100 € = 15 €
+        # 15% of 100 € = 15 €
         assert risk_manager.calculate_max_position_size(100.0) == pytest.approx(15.0)
 
     def test_stop_loss_price(self, risk_manager):
-        # entry 0.40 con SL 20% → 0.32
+        # entry 0.40 with SL 20% → 0.32
         assert risk_manager.calculate_stop_loss_price(0.40) == pytest.approx(0.32)
         # entry 0.50 → 0.40
         assert risk_manager.calculate_stop_loss_price(0.50) == pytest.approx(0.40)
 
     def test_take_profit_price(self, risk_manager):
-        # entry 0.40 con TP 30% → 0.52
+        # entry 0.40 with TP 30% → 0.52
         assert risk_manager.calculate_take_profit_price(0.40) == pytest.approx(0.52)
 
     def test_take_profit_capped_at_one(self, risk_manager):
-        # entry 0.85, TP 30% sería 1.105, debe capar a 0.999
+        # entry 0.85, TP 30% would be 1.105, must cap at 0.999
         assert risk_manager.calculate_take_profit_price(0.85) == pytest.approx(0.999)
 
 
 # =====================================================
-# Cierre de posiciones
+# Position closing
 # =====================================================
 
 
@@ -226,21 +226,21 @@ class TestShouldClosePosition:
         assert decision.pnl_pct >= 0.30
 
     def test_funciona_para_buy_no(self, risk_manager):
-        # BUY_NO usa la misma fórmula porque cada lado es su propio token
+        # BUY_NO uses the same formula because each side is its own token
         position = make_position(
             entry_price=0.60,
             side=TradeSide.BUY_NO,
             stop_loss_price=0.48,
             take_profit_price=0.78,
         )
-        # Precio del token NO baja a 0.48 → stop loss
+        # NO token price falls to 0.48 → stop loss
         decision = risk_manager.should_close_position(position, current_price=0.48)
         assert decision.should_close is True
         assert decision.reason == CloseReason.STOP_LOSS
 
     def test_pnl_eur_correcto(self, risk_manager):
         position = make_position(entry_price=0.40, size_eur=20.0)
-        # Precio sube de 0.40 a 0.50 → +25%
+        # Price rises from 0.40 to 0.50 → +25%
         decision = risk_manager.should_close_position(position, current_price=0.50)
         assert decision.pnl_pct == pytest.approx(0.25)
         assert decision.pnl_eur == pytest.approx(20.0 * 0.25)  # 5 €
@@ -283,22 +283,22 @@ class TestDrawdown:
         assert risk_manager.pause_reason is not None
 
     def test_drawdown_30_exacto_pausa(self, risk_manager):
-        # 150 * 0.70 = 105 → drawdown exactamente 30%
+        # 150 * 0.70 = 105 → drawdown exactly 30%
         status = risk_manager.update_balance_and_check_drawdown(105.0)
         assert status.current_drawdown_pct == pytest.approx(0.30)
         assert status.threshold_breached is True
 
     def test_no_se_despausa_solo(self, risk_manager):
-        # Pausar
+        # Pause
         risk_manager.update_balance_and_check_drawdown(100.0)
         assert risk_manager.is_paused is True
-        # Aunque el balance se recupere, el bot sigue pausado
+        # Even if the balance recovers, the bot stays paused
         risk_manager.update_balance_and_check_drawdown(150.0)
         assert risk_manager.is_paused is True
 
 
 # =====================================================
-# Control manual
+# Manual control
 # =====================================================
 
 
@@ -312,7 +312,7 @@ class TestManualControl:
         assert risk_manager.pause_reason is None
 
     def test_resume_sin_pausa_es_no_op(self, risk_manager):
-        # No debe lanzar excepción aunque no estuviera pausado
+        # Must not raise an exception even if it was not paused
         risk_manager.manually_resume()
         assert risk_manager.is_paused is False
 
@@ -331,14 +331,14 @@ class TestManualControl:
 
 
 # =====================================================
-# Integración: flujo completo simulado
+# Integration: simulated full flow
 # =====================================================
 
 
 class TestIntegrationFlow:
     def test_flujo_completo_trade_ganador(self, risk_manager):
-        """Simula: validar → abrir → cerrar con TP → balance actualizado."""
-        # 1) Validar trade nuevo de 20€ a precio 0.40
+        """Simulates: validate → open → close with TP → balance updated."""
+        # 1) Validate new 20€ trade at price 0.40
         result = risk_manager.validate_new_trade(
             proposed_size_eur=20.0,
             current_balance_eur=150.0,
@@ -347,7 +347,7 @@ class TestIntegrationFlow:
         )
         assert result.approved is True
 
-        # 2) Calcular niveles y abrir posición
+        # 2) Calculate levels and open position
         sl = risk_manager.calculate_stop_loss_price(0.40)
         tp = risk_manager.calculate_take_profit_price(0.40)
         assert sl == pytest.approx(0.32)
@@ -355,12 +355,12 @@ class TestIntegrationFlow:
 
         position = make_position(entry_price=0.40, stop_loss_price=sl, take_profit_price=tp)
 
-        # 3) Precio sube a 0.55 → TP
+        # 3) Price rises to 0.55 → TP
         decision = risk_manager.should_close_position(position, current_price=0.55)
         assert decision.should_close is True
         assert decision.reason == CloseReason.TAKE_PROFIT
 
-        # 4) Actualizar balance (ganamos ~+37.5% sobre 20€ = 7.5€)
+        # 4) Update balance (we gain ~+37.5% on 20€ = 7.5€)
         new_balance = 150.0 + decision.pnl_eur
         status = risk_manager.update_balance_and_check_drawdown(new_balance)
         assert status.peak_balance_eur > 150.0

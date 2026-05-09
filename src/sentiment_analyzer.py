@@ -1,28 +1,28 @@
 """
-Sentiment Analyzer — el cerebro del bot.
+Sentiment Analyzer — the brain of the bot.
 
-Toma un mercado de Polymarket y la lista de noticias relevantes para él, y
-pide a Claude un análisis cuantitativo estructurado:
-- probabilidad consensuada YES
-- edge sobre el precio actual
-- sentimiento agregado y magnitud del impacto
-- recomendación: COMPRAR_YES / COMPRAR_NO / ESPERAR / INSUFFICIENT_DATA
-- timeframe y posibles contradicciones entre fuentes
+Takes a Polymarket market and the list of relevant news articles for it, and
+asks Claude for a structured quantitative analysis:
+- consensus YES probability
+- edge over the current price
+- aggregated sentiment and impact magnitude
+- recommendation: COMPRAR_YES / COMPRAR_NO / ESPERAR / INSUFFICIENT_DATA
+- timeframe and possible contradictions between sources
 
-Diseño:
-- Cache LRU en memoria por hash de (mercado + noticias) → no regasta tokens
-  analizando lo mismo dos veces. TTL configurable.
-- Si no hay noticias relevantes (o todas son antiguas), devuelve directamente
-  INSUFFICIENT_DATA SIN llamar al LLM (ahorra tokens).
-- Prompt en INGLÉS para mejor performance del modelo, pero comentarios en
-  español para legibilidad del proyecto.
-- Validación post-LLM: clipping de valores fuera de rango, fallback seguro
-  si el JSON viene corrupto.
-- Aplica la lección aprendida del turno anterior: penaliza fuertemente la
-  confianza si las noticias son viejas (> 12h en su mayoría).
+Design:
+- In-memory LRU cache by hash of (market + news) → no wasted tokens
+  analyzing the same thing twice. Configurable TTL.
+- If there are no relevant articles (or all are old), returns
+  INSUFFICIENT_DATA directly WITHOUT calling the LLM (saves tokens).
+- Prompt in ENGLISH for better model performance; comments in
+  English for project readability.
+- Post-LLM validation: clipping out-of-range values, safe fallback
+  if JSON comes back corrupted.
+- Applies the lesson learned from the previous turn: strongly penalizes
+  confidence if news is old (> 12h for the majority).
 
-El SENTIMENT_ANALYZER NO ejecuta trades. Solo emite una opinión cuantitativa.
-El DECISION_ENGINE (módulo siguiente) decidirá si actuar sobre ella.
+The SENTIMENT_ANALYZER does NOT execute trades. It only emits a quantitative opinion.
+The DECISION_ENGINE (next module) will decide whether to act on it.
 """
 
 from __future__ import annotations
@@ -53,12 +53,12 @@ from src.models import (
 )
 
 
-# Si la noticia más reciente es más vieja que esto, consideramos el análisis
-# poco accionable y devolvemos INSUFFICIENT_DATA sin llamar al LLM.
+# If the most recent article is older than this, we consider the analysis
+# not actionable and return INSUFFICIENT_DATA without calling the LLM.
 MAX_FRESH_AGE_HOURS = 48.0
 
-# Edge mínimo para que merezca la pena recomendar un trade. Por debajo de
-# esto recomendamos ESPERAR aunque el LLM diga lo contrario.
+# Minimum edge for a trade to be worth recommending. Below this we
+# recommend ESPERAR even if the LLM says otherwise.
 MIN_EDGE_FOR_TRADE = 0.05
 
 
@@ -201,7 +201,7 @@ def build_sports_user_prompt(
     market: "MarketSnapshot",
     articles: list["NewsArticle"],
 ) -> str:
-    """Construye el prompt de usuario para análisis de mercados deportivos."""
+    """Builds the user prompt for sports market analysis."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
 
@@ -251,7 +251,7 @@ def build_user_prompt(
     market: MarketSnapshot,
     articles: list[NewsArticle],
 ) -> str:
-    """Construye el mensaje de usuario con la info del mercado + noticias."""
+    """Builds the user message with market info + news."""
     now = datetime.now(timezone.utc)
 
     parts: list[str] = []
@@ -308,7 +308,7 @@ def build_user_prompt(
 
 
 class SentimentAnalyzer:
-    """Analiza mercados+noticias y produce MarketAnalysis estructurados."""
+    """Analyzes markets + news and produces structured MarketAnalysis objects."""
 
     def __init__(
         self,
@@ -325,7 +325,7 @@ class SentimentAnalyzer:
         self._log = logger.bind(module="sentiment_analyzer")
 
     # =====================================================
-    # API pública
+    # Public API
     # =====================================================
 
     def analyze(
@@ -334,18 +334,18 @@ class SentimentAnalyzer:
         articles: list[NewsArticle],
         force_refresh: bool = False,
     ) -> MarketAnalysis:
-        """Analiza un mercado dadas sus noticias asociadas.
+        """Analyzes a market given its associated news articles.
 
-        Si no hay noticias suficientes o son demasiado viejas, devuelve un
-        análisis con recommendation=INSUFFICIENT_DATA SIN llamar al LLM,
-        SALVO si config.decision.allow_low_info_trades=true (entonces se
-        permite analizar con menos noticias pero el sizing posterior será
-        más conservador).
+        If there are not enough articles or they are too old, returns an
+        analysis with recommendation=INSUFFICIENT_DATA WITHOUT calling the LLM,
+        UNLESS config.decision.allow_low_info_trades=true (in which case
+        analysis with fewer articles is allowed but subsequent sizing will be
+        more conservative).
         """
-        # 1) Filtros pre-LLM (ahorrar tokens)
+        # 1) Pre-LLM filters (save tokens)
         relevant_articles = self._filter_relevant(articles)
 
-        # Threshold de noticias mínimas: depende de si permitimos low-info
+        # Minimum article threshold: depends on whether we allow low-info
         cfg_decision = self.config.decision
         min_articles_normal = 2
         min_articles_low_info = cfg_decision.low_info_min_articles
@@ -363,7 +363,7 @@ class SentimentAnalyzer:
             return self._make_insufficient_data(
                 market,
                 articles,
-                reason=f"Solo {len(relevant_articles)} artículos relevantes",
+                reason=f"Only {len(relevant_articles)} relevant articles",
             )
 
         # 2) Cache lookup
@@ -371,23 +371,23 @@ class SentimentAnalyzer:
         if not force_refresh and self.cfg_llm.cache_analysis:
             cached = self._cache.get(cache_key)
             if cached and (time.time() - cached[0]) < self.cfg_llm.cache_ttl_seconds:
-                self._log.debug("Cache hit para market {}", market.market_id)
+                self._log.debug("Cache hit for market {}", market.market_id)
                 return cached[1]
 
-        # 3) Llamada al LLM
+        # 3) LLM call
         try:
             analysis = self._call_llm(market, relevant_articles)
-            # Marcar si fue analizado en modo low-info
+            # Mark if analyzed in low-info mode
             if is_low_info_mode:
                 analysis.is_low_info = True
                 self._log.info(
-                    "Análisis LOW_INFO de {} (solo {} noticias)",
+                    "LOW_INFO analysis of {} (only {} articles)",
                     market.market_id,
                     len(relevant_articles),
                 )
         except DailyBudgetExceeded as exc:
             self._log.warning(
-                "Análisis omitido por límite de presupuesto diario: {}", exc
+                "Analysis skipped due to daily budget limit: {}", exc
             )
             return self._make_insufficient_data(
                 market,
@@ -401,7 +401,7 @@ class SentimentAnalyzer:
             elif exc.retry_after_seconds:
                 reset_info = f" Retry in {exc.retry_after_seconds}s"
             self._log.error(
-                "CRÉDITOS AGOTADOS — análisis no disponible.{}", reset_info
+                "CREDITS EXHAUSTED — analysis unavailable.{}", reset_info
             )
             return self._make_insufficient_data(
                 market,
@@ -412,12 +412,12 @@ class SentimentAnalyzer:
             exc_str = str(exc)
             if "timeout" in exc_str.lower():
                 self._log.warning(
-                    "Análisis omitido por timeout (market {}) — Ollama ocupado",
+                    "Analysis skipped due to timeout (market {}) — Ollama busy",
                     market.market_id,
                 )
             else:
                 self._log.error(
-                    "Análisis falló para market {}: {}",
+                    "Analysis failed for market {}: {}",
                     market.market_id,
                     exc,
                 )
@@ -427,7 +427,7 @@ class SentimentAnalyzer:
                 reason=f"LLM error: {exc}",
             )
 
-        # 4) Validación y clipping post-LLM
+        # 4) Post-LLM validation and clipping
         analysis = self._validate(analysis)
 
         # 5) Cache
@@ -439,7 +439,7 @@ class SentimentAnalyzer:
         pairs: list[tuple[MarketSnapshot, list[NewsArticle]]],
         max_workers: int = 1,
     ) -> list[MarketAnalysis]:
-        """Analiza una lista de (mercado, noticias).
+        """Analyzes a list of (market, articles) pairs.
 
         max_workers=1  → serial (original behaviour, safe for Anthropic throttling).
         max_workers>1  → ThreadPoolExecutor; requires Ollama configured with
@@ -452,12 +452,12 @@ class SentimentAnalyzer:
                 try:
                     results.append(self.analyze(market, articles))
                 except Exception as exc:
-                    self._log.error("Análisis batch falló para {}: {}", market.market_id, exc)
+                    self._log.error("Batch analysis failed for {}: {}", market.market_id, exc)
                     results.append(self._make_insufficient_data(market, articles, reason=str(exc)))
             return results
 
         self._log.info(
-            "Análisis paralelo: {} mercados con {} workers",
+            "Parallel analysis: {} markets with {} workers",
             len(pairs),
             max_workers,
         )
@@ -502,7 +502,7 @@ class SentimentAnalyzer:
                     ordered[idx] = future.result()
                 except Exception as exc:
                     self._log.error(
-                        "Parallel: fallback INSUFFICIENT_DATA para market #{} ({}): {}",
+                        "Parallel: fallback INSUFFICIENT_DATA for market #{} ({}): {}",
                         idx, market.market_id, exc,
                     )
                     ordered[idx] = self._make_insufficient_data(
@@ -516,7 +516,7 @@ class SentimentAnalyzer:
             if r.recommendation.value not in ("INSUFFICIENT_DATA", "ESPERAR")
         )
         self._log.info(
-            "Batch paralelo completado: {} mercados en {:.1f}s | {} accionables",
+            "Parallel batch complete: {} markets in {:.1f}s | {} actionable",
             len(results), elapsed_total, with_data,
         )
         return results
@@ -526,9 +526,9 @@ class SentimentAnalyzer:
         market: MarketSnapshot,
         articles: list[NewsArticle],
     ) -> MarketAnalysis:
-        """Versión deportiva del análisis: usa SPORTS_SYSTEM_PROMPT y solo recomienda COMPRAR_NO.
+        """Sports version of analysis: uses SPORTS_SYSTEM_PROMPT and only recommends COMPRAR_NO.
 
-        Sin caché — los mercados deportivos en directo cambian constantemente.
+        No cache — live sports markets change constantly.
         """
         try:
             user_prompt = build_sports_user_prompt(market, articles)
@@ -537,7 +537,7 @@ class SentimentAnalyzer:
                 user_prompt=user_prompt,
             )
         except (DailyBudgetExceeded, CreditsExhausted, LLMError) as exc:
-            self._log.warning("Sports LLM falló para {}: {}", market.market_id, exc)
+            self._log.warning("Sports LLM failed for {}: {}", market.market_id, exc)
             return self._make_insufficient_data(market, articles, reason=str(exc))
 
         try:
@@ -550,7 +550,7 @@ class SentimentAnalyzer:
         # Safety: sports module never opens YES trades
         if recommendation == TradeRecommendation.COMPRAR_YES:
             self._log.warning(
-                "Sports LLM devolvió COMPRAR_YES — forzando ESPERAR (no aplica en deportes)"
+                "Sports LLM returned COMPRAR_YES — forcing ESPERAR (not applicable in sports)"
             )
             recommendation = TradeRecommendation.ESPERAR
 
@@ -591,14 +591,14 @@ class SentimentAnalyzer:
         return analysis
 
     # =====================================================
-    # Filtros pre-LLM
+    # Pre-LLM filters
     # =====================================================
 
     def _filter_relevant(self, articles: list[NewsArticle]) -> list[NewsArticle]:
-        """Descarta artículos demasiado viejos o sin matched_keywords.
+        """Discards articles that are too old or have no matched_keywords.
 
-        Aplica la lección del turno anterior: si todas las noticias son viejas,
-        no merece la pena pedirle al LLM una opinión "fresca".
+        Applies the lesson from the previous turn: if all news is old,
+        there is no point asking the LLM for a "fresh" opinion.
         """
         if not articles:
             return []
@@ -610,12 +610,12 @@ class SentimentAnalyzer:
                 if age_h > MAX_FRESH_AGE_HOURS:
                     continue
             relevant.append(art)
-        # Limitar a top 10 por score para no inflar el prompt
+        # Limit to top 10 by score to avoid inflating the prompt
         relevant.sort(key=lambda a: a.preliminary_impact_score, reverse=True)
         return relevant[:10]
 
     # =====================================================
-    # Llamada al LLM
+    # LLM call
     # =====================================================
 
     def _call_llm(
@@ -629,7 +629,7 @@ class SentimentAnalyzer:
             user_prompt=user_prompt,
         )
 
-        # Parsear el JSON a MarketAnalysis con valores por defecto seguros
+        # Parse JSON to MarketAnalysis with safe defaults
         try:
             recommendation = TradeRecommendation(
                 parsed.get("recommendation", "ESPERAR")
@@ -671,35 +671,35 @@ class SentimentAnalyzer:
         )
 
     # =====================================================
-    # Validación
+    # Validation
     # =====================================================
 
     def _validate(self, analysis: MarketAnalysis) -> MarketAnalysis:
-        """Aplica reglas de seguridad sobre la salida del LLM.
+        """Applies safety rules to the LLM output.
 
-        Concretamente:
-        - Clip de valores fuera de rango (Pydantic ya valida tipos pero no bounds
-          de float arbitrarios sin Field constraints; aquí somos extra cuidadosos).
-        - Si confidence < umbral configurado, downgrade a ESPERAR.
-        - Si edge absoluto < MIN_EDGE_FOR_TRADE, downgrade a ESPERAR.
-        - Si la recomendación dice COMPRAR_YES pero edge es negativo (o viceversa),
-          es una contradicción interna del LLM → ESPERAR.
+        Specifically:
+        - Clips out-of-range values (Pydantic already validates types but not
+          arbitrary float bounds without Field constraints; we are extra careful here).
+        - If confidence < configured threshold, downgrade to ESPERAR.
+        - If absolute edge < MIN_EDGE_FOR_TRADE, downgrade to ESPERAR.
+        - If recommendation says COMPRAR_YES but edge is negative (or vice versa),
+          that is an internal LLM contradiction → ESPERAR.
         """
-        # Threshold de confianza del config
+        # Confidence threshold from config
         min_conf = self.cfg_llm.min_confidence_threshold
         rec = analysis.recommendation
 
         if rec in (TradeRecommendation.COMPRAR_YES, TradeRecommendation.COMPRAR_NO):
             if analysis.confidence < min_conf:
                 self._log.info(
-                    "Downgrade a ESPERAR: confidence {} < threshold {}",
+                    "Downgrade to ESPERAR: confidence {} < threshold {}",
                     analysis.confidence,
                     min_conf,
                 )
                 analysis.recommendation = TradeRecommendation.ESPERAR
             elif abs(analysis.edge) < MIN_EDGE_FOR_TRADE:
                 self._log.info(
-                    "Downgrade a ESPERAR: |edge|={:.3f} < min={:.3f}",
+                    "Downgrade to ESPERAR: |edge|={:.3f} < min={:.3f}",
                     abs(analysis.edge),
                     MIN_EDGE_FOR_TRADE,
                 )
@@ -710,7 +710,7 @@ class SentimentAnalyzer:
                 rec == TradeRecommendation.COMPRAR_NO and analysis.edge > 0
             ):
                 self._log.warning(
-                    "LLM contradicción: rec={} pero edge={:.3f}. → ESPERAR",
+                    "LLM contradiction: rec={} but edge={:.3f}. → ESPERAR",
                     rec.value,
                     analysis.edge,
                 )
@@ -728,7 +728,7 @@ class SentimentAnalyzer:
         articles: list[NewsArticle],
         reason: str,
     ) -> MarketAnalysis:
-        """Construye un análisis 'no hay datos' sin llamar al LLM."""
+        """Builds a 'no data' analysis without calling the LLM."""
         return MarketAnalysis(
             market_id=market.market_id,
             market_question=market.question,
@@ -737,7 +737,7 @@ class SentimentAnalyzer:
             no_token_id=market.no_token_id,
             current_yes_price=market.yes_price,
             current_no_price=market.no_price,
-            consensus_probability_yes=market.yes_price,  # neutral: el precio actual
+            consensus_probability_yes=market.yes_price,  # neutral: current price
             edge=0.0,
             confidence=0,
             sentiment_score=0.0,
@@ -757,10 +757,10 @@ class SentimentAnalyzer:
         market: MarketSnapshot,
         articles: list[NewsArticle],
     ) -> str:
-        """Hash estable de (market_id, market_yes_price, sorted article ids)."""
+        """Stable hash of (market_id, market_yes_price, sorted article ids)."""
         ids = sorted(a.article_id for a in articles)
-        # Incluimos el precio (redondeado) porque queremos re-analizar si el
-        # mercado se ha movido aunque las noticias sean las mismas.
+        # We include the price (rounded) because we want to re-analyze if the
+        # market has moved even if the articles are the same.
         price_bucket = round(market.yes_price, 3)
         payload = f"{market.market_id}|{price_bucket}|{','.join(ids)}"
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]

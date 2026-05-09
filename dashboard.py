@@ -1,6 +1,6 @@
 """
-Dashboard del Polymarket Paper Trading Bot — v4.
-Ejecutar: streamlit run dashboard.py
+Polymarket Paper Trading Bot Dashboard — v4.
+Run: streamlit run dashboard.py
 """
 
 from __future__ import annotations

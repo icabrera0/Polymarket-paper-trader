@@ -1,15 +1,15 @@
 """
-Tests del Backtester.
+Tests for the Backtester.
 
-Cubren:
-- Detección de mercados resueltos vs no resueltos.
-- Parsing de precios de resolución (YES ganó / NO ganó).
-- Pipeline completo con clientes fake (sin red ni LLM real).
-- Cálculo de métricas agregadas (win rate, P&L, Sharpe).
+Cover:
+- Detection of resolved vs unresolved markets.
+- Parsing of resolution prices (YES won / NO won).
+- Full pipeline with fake clients (no network or real LLM).
+- Calculation of aggregate metrics (win rate, P&L, Sharpe).
 
-Sin red. Sin LLM real. Sin Polymarket.
+No network. No real LLM. No Polymarket.
 
-Ejecutar:
+Run:
     pytest tests/test_backtester.py -v
 """
 
@@ -57,7 +57,7 @@ def make_resolved_market(
 
 
 # =====================================================
-# Tests de detección de mercados resueltos
+# Tests for resolved market detection
 # =====================================================
 
 
@@ -87,7 +87,7 @@ class TestIsTrulyResolved:
 
 
 # =====================================================
-# Tests de parsing
+# Tests for parsing
 # =====================================================
 
 
@@ -98,7 +98,7 @@ class TestParseResolvedMarket:
         snap, resolved_yes = bt._parse_resolved_market(m)
         assert snap is not None
         assert resolved_yes is True
-        assert snap.yes_price == 0.50  # precio simulado pre-resolución
+        assert snap.yes_price == 0.50  # simulated pre-resolution price
         assert snap.yes_token_id == "0xyes"
 
     def test_parsea_mercado_no_gano(self, config):
@@ -118,13 +118,13 @@ class TestParseResolvedMarket:
     def test_descarta_mercado_sin_tokens(self, config):
         bt = Backtester(config, mode="current", max_markets=1)
         m = make_resolved_market()
-        m["clobTokenIds"] = json.dumps(["only_one"])  # solo 1 token
+        m["clobTokenIds"] = json.dumps(["only_one"])  # only 1 token
         snap, _ = bt._parse_resolved_market(m)
         assert snap is None
 
 
 # =====================================================
-# Tests de extracción de keywords
+# Tests for keyword extraction
 # =====================================================
 
 
@@ -146,13 +146,13 @@ class TestExtractKeywords:
 
 
 # =====================================================
-# Tests de métricas
+# Tests for metrics
 # =====================================================
 
 
 class TestMetrics:
     def test_sharpe_serie_uniforme(self):
-        """Si todos los P&L son iguales, std=0 → Sharpe=0."""
+        """If all P&L values are equal, std=0 → Sharpe=0."""
         trades = [
             BacktestTrade(
                 market_id=f"m{i}", market_question="Q",
@@ -167,7 +167,7 @@ class TestMetrics:
         assert Backtester._calculate_sharpe(trades) == 0.0
 
     def test_sharpe_con_varianza(self):
-        """Con P&L variables debería calcular algo distinto de 0."""
+        """With variable P&L it should calculate something other than 0."""
         import random
         random.seed(42)
         trades = [
@@ -200,13 +200,13 @@ class TestMetrics:
 
 
 # =====================================================
-# Tests del BacktestResult
+# Tests for BacktestResult
 # =====================================================
 
 
 class TestBacktestResult:
     def test_print_summary_no_crashea(self):
-        """print_summary debe ejecutarse sin excepción aunque no haya trades."""
+        """print_summary must execute without exception even with no trades."""
         result = BacktestResult(
             mode="current",
             start_time=datetime.now(timezone.utc),
@@ -224,4 +224,4 @@ class TestBacktestResult:
             sharpe_ratio=0.8,
             trades=[],
         )
-        result.print_summary()  # No debe lanzar excepción
+        result.print_summary()  # Must not raise an exception

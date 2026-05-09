@@ -65,8 +65,8 @@ class ClobApiClient:
             if exc.response is not None and exc.response.status_code == 404:
                 _DEAD_TOKENS.add(token_id)
                 self._log.warning(
-                    "Token {}… no encontrado en CLOB (404) — mercado posiblemente "
-                    "resuelto. Se omitirá en futuros ciclos.",
+                    "Token {}… not found in CLOB (404) — market possibly "
+                    "resolved. Will be skipped in future cycles.",
                     token_id[:12],
                 )
             else:

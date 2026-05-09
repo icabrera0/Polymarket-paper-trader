@@ -1,21 +1,21 @@
 """
-Login interactivo para Telegram (ejecutar UNA SOLA VEZ).
+Interactive Telegram login (run ONCE).
 
-Crea data/telegram.session y deja al cliente autorizado para todas las
-ejecuciones posteriores. Solo necesitas hacer esto:
-- La primera vez que configures Telegram.
-- Si pierdes el archivo data/telegram.session.
-- Si la sesión expira en Telegram (raro, suele ser por seguridad).
+Creates data/telegram.session and leaves the client authorized for all
+subsequent runs. You only need to do this:
+- The first time you configure Telegram.
+- If you lose the data/telegram.session file.
+- If the session expires in Telegram (rare, usually due to security).
 
-Pasos previos:
-1. Tener TELEGRAM_API_ID y TELEGRAM_API_HASH en .env (de my.telegram.org).
-2. Tener TELEGRAM_PHONE en formato internacional (+34...).
+Prerequisites:
+1. Have TELEGRAM_API_ID and TELEGRAM_API_HASH in .env (from my.telegram.org).
+2. Have TELEGRAM_PHONE in international format (+1...).
 
-Ejecutar:
+Run:
     python scripts/telegram_login.py
 
-Te pedirá un código que recibirás por Telegram (no SMS) y opcionalmente la
-contraseña 2FA si la tienes activada.
+It will ask for a code you will receive via the Telegram app (not SMS) and
+optionally the 2FA password if you have it enabled.
 """
 
 from __future__ import annotations
@@ -34,26 +34,26 @@ def main() -> None:
     config = load_config()
 
     if not config.telegram_api_id or not config.telegram_api_hash:
-        print("ERROR: Falta TELEGRAM_API_ID y/o TELEGRAM_API_HASH en .env")
-        print("Consíguelos en https://my.telegram.org → API development tools")
+        print("ERROR: Missing TELEGRAM_API_ID and/or TELEGRAM_API_HASH in .env")
+        print("Get them at https://my.telegram.org → API development tools")
         sys.exit(1)
 
     if not config.telegram_phone:
-        print("ERROR: Falta TELEGRAM_PHONE en .env (formato +34600000000)")
+        print("ERROR: Missing TELEGRAM_PHONE in .env (format +1600000000)")
         sys.exit(1)
 
     try:
         from telethon.sync import TelegramClient
     except ImportError:
-        print("ERROR: Telethon no está instalado. Ejecuta: pip install telethon")
+        print("ERROR: Telethon is not installed. Run: pip install telethon")
         sys.exit(1)
 
     data_dir = PROJECT_ROOT / "data"
     data_dir.mkdir(exist_ok=True)
     session_path = str(data_dir / "telegram")
 
-    print(f"Iniciando sesión en Telegram con teléfono {config.telegram_phone}...")
-    print("Vas a recibir un código por la app de Telegram (no SMS).")
+    print(f"Starting Telegram session with phone {config.telegram_phone}...")
+    print("You will receive a code via the Telegram app (not SMS).")
     print()
 
     client = TelegramClient(
@@ -65,14 +65,14 @@ def main() -> None:
     try:
         client.start(phone=config.telegram_phone)
         me = client.get_me()
-        print(f"\n✓ Sesión creada correctamente.")
-        print(f"  Usuario: {me.first_name} (@{me.username or 'sin username'})")
+        print(f"\n✓ Session created successfully.")
+        print(f"  User: {me.first_name} (@{me.username or 'no username'})")
         print(f"  ID: {me.id}")
-        print(f"  Sesión guardada en: {session_path}.session")
+        print(f"  Session saved at: {session_path}.session")
         print()
-        print("Ya puedes activar telegram en config/settings.yaml:")
+        print("You can now enable telegram in config/settings.yaml:")
         print("    news.telegram.enabled: true")
-        print("Y añadir los canales que quieras leer.")
+        print("And add the channels you want to read.")
     finally:
         client.disconnect()
 

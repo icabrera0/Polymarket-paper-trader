@@ -1,23 +1,23 @@
 """
-Risk Manager — el guardián del bot.
+Risk Manager — the guardian of the bot.
 
-Responsabilidades:
-1. Validar cada trade nuevo contra los límites configurados ANTES de ejecutarlo.
-2. Calcular el tamaño máximo permitido por posición.
-3. Calcular niveles de stop loss y take profit en el momento de abrir.
-4. Decidir si una posición abierta debe cerrarse (stop loss / take profit).
-5. Llevar el control del drawdown y pausar el bot si supera el umbral.
+Responsibilities:
+1. Validate each new trade against configured limits BEFORE executing it.
+2. Calculate the maximum allowed size per position.
+3. Calculate stop loss and take profit levels at the time of opening.
+4. Decide whether an open position should be closed (stop loss / take profit).
+5. Track drawdown and pause the bot if it exceeds the threshold.
 
-El RiskManager NO conoce noticias ni sentiment scores: solo aplica reglas
-numéricas. Eso lo hace fácilmente testeable en aislamiento.
+The RiskManager has no knowledge of news or sentiment scores: it only applies
+numerical rules. This makes it easily testable in isolation.
 
-Reglas calibradas para 150 € de bankroll (config/settings.yaml → risk):
-- Tamaño máximo por posición: 15% del balance (~22 €)
-- Tamaño mínimo: 5 €
-- Máx. 3 posiciones simultáneas
-- Stop loss: -20% del precio de entrada
-- Take profit: +30% del precio de entrada (señal para evaluar cierre)
-- Drawdown máximo: 30% sobre el balance pico → bot pausado
+Rules calibrated for a €150 bankroll (config/settings.yaml → risk):
+- Maximum position size: 15% of balance (~€22)
+- Minimum size: €5
+- Max 3 simultaneous positions
+- Stop loss: -20% of entry price
+- Take profit: +30% of entry price (signal to evaluate closing)
+- Maximum drawdown: 30% over peak balance → bot paused
 """
 
 from __future__ import annotations
@@ -39,18 +39,18 @@ from src.models import (
 
 
 class RiskManager:
-    """Aplica las reglas de gestión de riesgo. Stateful: mantiene peak y pausa."""
+    """Applies risk management rules. Stateful: tracks peak and pause state."""
 
     def __init__(
         self,
         config: BotConfig,
         initial_balance_eur: Optional[float] = None,
     ) -> None:
-        """Inicializa el RiskManager.
+        """Initializes the RiskManager.
 
         Args:
-            config: configuración cargada con load_config().
-            initial_balance_eur: balance inicial. Si es None, usa el del config.
+            config: configuration loaded with load_config().
+            initial_balance_eur: initial balance. If None, uses the value from config.
         """
         self.config = config
         self.risk = config.risk
@@ -66,7 +66,7 @@ class RiskManager:
 
         self._log = logger.bind(module="risk_manager")
         self._log.info(
-            "RiskManager inicializado: balance={:.2f}€, max_pos={:.0%}, "
+            "RiskManager initialized: balance={:.2f}€, max_pos={:.0%}, "
             "stop_loss={:.0%}, max_drawdown={:.0%}",
             self._initial_balance,
             self.risk.max_position_size_pct,
@@ -75,7 +75,7 @@ class RiskManager:
         )
 
     # =====================================================
-    # Estado
+    # State
     # =====================================================
 
     @property
@@ -95,7 +95,7 @@ class RiskManager:
         return self._initial_balance
 
     # =====================================================
-    # Validación de trades nuevos
+    # New trade validation
     # =====================================================
 
     def validate_new_trade(
@@ -105,57 +105,57 @@ class RiskManager:
         open_positions_count: int,
         entry_price: float,
     ) -> RiskCheckResult:
-        """Valida si un trade nuevo puede abrirse.
+        """Validates whether a new trade can be opened.
 
         Args:
-            proposed_size_eur: tamaño propuesto en €.
-            current_balance_eur: balance disponible actual.
-            open_positions_count: posiciones actualmente abiertas.
-            entry_price: precio de entrada del token (entre 0 y 1).
+            proposed_size_eur: proposed size in €.
+            current_balance_eur: current available balance.
+            open_positions_count: currently open positions.
+            entry_price: token entry price (between 0 and 1).
 
         Returns:
-            RiskCheckResult con `approved` y, si aplica, `adjusted_size_eur`.
+            RiskCheckResult with `approved` and, if applicable, `adjusted_size_eur`.
         """
         rejections: list[RejectReason] = []
         warnings: list[str] = []
         adjusted_size: Optional[float] = None
 
-        # 1) Bot pausado por drawdown
+        # 1) Bot paused due to drawdown
         if self._is_paused:
             rejections.append(RejectReason.BOT_PAUSED)
             self._log.warning(
-                "Trade rechazado: bot pausado ({})", self._pause_reason
+                "Trade rejected: bot paused ({})", self._pause_reason
             )
             return RiskCheckResult(approved=False, rejection_reasons=rejections)
 
-        # 2) Precio inválido (debe estar estrictamente entre 0 y 1)
+        # 2) Invalid price (must be strictly between 0 and 1)
         if not (0 < entry_price < 1):
             rejections.append(RejectReason.INVALID_PRICE)
             return RiskCheckResult(approved=False, rejection_reasons=rejections)
 
-        # 3) Demasiadas posiciones abiertas
+        # 3) Too many open positions
         if open_positions_count >= self.risk.max_simultaneous_positions:
             rejections.append(RejectReason.MAX_POSITIONS_REACHED)
 
-        # 4) Tamaño por debajo del mínimo
+        # 4) Size below minimum
         if proposed_size_eur < self.risk.min_trade_size_eur:
             rejections.append(RejectReason.SIZE_BELOW_MIN)
 
-        # 5) Balance insuficiente: pedimos más € de los que tenemos.
-        #    Se comprueba ANTES del recorte por max_position porque indica un
-        #    error en la cadena que llamó al RiskManager.
+        # 5) Insufficient balance: requesting more € than available.
+        #    Checked BEFORE the max_position trim because it indicates an
+        #    error in the chain that called the RiskManager.
         if proposed_size_eur > current_balance_eur:
             rejections.append(RejectReason.INSUFFICIENT_BALANCE)
 
-        # 6) Tamaño por encima del máximo permitido → recortar (no rechazar)
+        # 6) Size above maximum allowed → trim (do not reject)
         max_allowed = self.calculate_max_position_size(current_balance_eur)
         if proposed_size_eur > max_allowed:
             adjusted_size = max_allowed
             warnings.append(
-                f"Tamaño solicitado ({proposed_size_eur:.2f}€) excede el máximo "
-                f"({max_allowed:.2f}€). Ajustado a {adjusted_size:.2f}€."
+                f"Requested size ({proposed_size_eur:.2f}€) exceeds the maximum "
+                f"({max_allowed:.2f}€). Adjusted to {adjusted_size:.2f}€."
             )
-            # Si tras el recorte no llega al mínimo, rechazar
+            # If after trimming it falls below the minimum, reject
             if adjusted_size < self.risk.min_trade_size_eur:
                 rejections.append(RejectReason.SIZE_ABOVE_MAX)
 
@@ -169,8 +169,8 @@ class RiskManager:
 
         if not approved:
             self._log.warning(
-                "Trade rechazado | size={:.2f}€ balance={:.2f}€ open={} "
-                "price={:.3f} | razones: {}",
+                "Trade rejected | size={:.2f}€ balance={:.2f}€ open={} "
+                "price={:.3f} | reasons: {}",
                 proposed_size_eur,
                 current_balance_eur,
                 open_positions_count,
@@ -180,7 +180,7 @@ class RiskManager:
         else:
             final_size = adjusted_size if adjusted_size is not None else proposed_size_eur
             self._log.info(
-                "Trade aprobado | size={:.2f}€ (ajustado={}) price={:.3f}",
+                "Trade approved | size={:.2f}€ (adjusted={}) price={:.3f}",
                 final_size,
                 adjusted_size is not None,
                 entry_price,
@@ -189,32 +189,32 @@ class RiskManager:
         return result
 
     # =====================================================
-    # Cálculos de tamaño y niveles
+    # Size and level calculations
     # =====================================================
 
     def calculate_max_position_size(self, current_balance_eur: float) -> float:
-        """Tamaño máximo permitido por posición (€) sobre el balance actual."""
+        """Maximum allowed position size (€) based on current balance."""
         return current_balance_eur * self.risk.max_position_size_pct
 
     def calculate_stop_loss_price(self, entry_price: float) -> float:
-        """Precio del token al que disparar el stop loss.
+        """Token price at which to trigger the stop loss.
 
-        Si entry_price = $0.40 y stop_loss_pct = 0.20 → SL en $0.32 (-20%).
-        Sirve igual para BUY_YES y BUY_NO porque cada uno es su propio token.
+        If entry_price = $0.40 and stop_loss_pct = 0.20 → SL at $0.32 (-20%).
+        Works the same for BUY_YES and BUY_NO since each is its own token.
         """
         return round(entry_price * (1 - self.risk.stop_loss_pct), 4)
 
     def calculate_take_profit_price(self, entry_price: float) -> float:
-        """Precio del token al que se considera tomar beneficios.
+        """Token price at which taking profits is considered.
 
-        En Polymarket el precio máximo es $1, así que cap a 0.999 para evitar
-        precios imposibles cuando entry_price es alto.
+        On Polymarket the maximum price is $1, so cap at 0.999 to avoid
+        impossible prices when entry_price is high.
         """
         target = entry_price * (1 + self.risk.take_profit_pct)
         return round(min(target, 0.999), 4)
 
     # =====================================================
-    # Cierre de posiciones abiertas
+    # Open position closing
     # =====================================================
 
     def should_close_position(
@@ -222,22 +222,22 @@ class RiskManager:
         position: Position,
         current_price: float,
     ) -> CloseDecision:
-        """Decide si cerrar una posición según stop loss, take profit o tiempo.
+        """Decides whether to close a position based on stop loss, take profit, or time.
 
-        Orden de evaluación:
-          1. Stop loss (protección — siempre primero)
-          2. Tiempo: TP ajustado tras N horas (Tier 1)
-          3. Take profit original
-          4. Tiempo: cierre si en beneficio tras N horas (Tier 2)
-          5. Tiempo: cierre forzado incondicional (Tier 3)
+        Evaluation order:
+          1. Stop loss (protection — always first)
+          2. Time: tightened TP after N hours (Tier 1)
+          3. Original take profit
+          4. Time: close if in profit after N hours (Tier 2)
+          5. Time: unconditional forced close (Tier 3)
 
-        Cierres por noticias contradictorias o resolución de mercado los gestiona
-        el DECISION_ENGINE en módulos posteriores.
+        Closes due to contradictory news or market resolution are handled
+        by the DECISION_ENGINE in downstream modules.
         """
         pnl_pct = position.current_pnl_pct(current_price)
         pnl_eur = position.current_pnl_eur(current_price)
 
-        # Calcular horas transcurridas desde la entrada
+        # Calculate hours held since entry
         now = datetime.now(timezone.utc)
         entry = position.entry_timestamp
         if entry.tzinfo is None:
@@ -246,10 +246,10 @@ class RiskManager:
 
         risk = self.risk
 
-        # 1) Stop loss: precio cae hasta o por debajo del nivel calculado
+        # 1) Stop loss: price falls to or below the calculated level
         if current_price <= position.stop_loss_price:
             self._log.info(
-                "STOP LOSS disparado | trade={} entry={:.3f} now={:.3f} pnl={:.2%}",
+                "STOP LOSS triggered | trade={} entry={:.3f} now={:.3f} pnl={:.2%}",
                 position.trade_id[:8],
                 position.entry_price,
                 current_price,
@@ -260,16 +260,16 @@ class RiskManager:
                 reason=CloseReason.STOP_LOSS,
                 pnl_pct=pnl_pct,
                 pnl_eur=pnl_eur,
-                notes=f"Precio {current_price:.4f} <= SL {position.stop_loss_price:.4f}",
+                notes=f"Price {current_price:.4f} <= SL {position.stop_loss_price:.4f}",
             )
 
-        # 2) TIME EXIT — Tier 1: TP ajustado tras time_tighten_tp_hours
+        # 2) TIME EXIT — Tier 1: tightened TP after time_tighten_tp_hours
         if hours_held >= risk.time_tighten_tp_hours:
             tightened_tp = position.entry_price * (1 + risk.time_tighten_tp_pct)
             if current_price >= tightened_tp:
                 self._log.info(
-                    "TIME EXIT (TP ajustado) | trade={} held={:.1f}h "
-                    "precio={:.4f} TP_tight={:.4f} pnl={:+.2%}",
+                    "TIME EXIT (tightened TP) | trade={} held={:.1f}h "
+                    "price={:.4f} TP_tight={:.4f} pnl={:+.2%}",
                     position.trade_id[:8],
                     hours_held,
                     current_price,
@@ -282,16 +282,16 @@ class RiskManager:
                     pnl_pct=pnl_pct,
                     pnl_eur=pnl_eur,
                     notes=(
-                        f"TP ajustado por tiempo: {hours_held:.1f}h "
+                        f"TP tightened by time: {hours_held:.1f}h "
                         f">= {risk.time_tighten_tp_hours:.0f}h | "
-                        f"precio={current_price:.4f} >= TP_ajustado={tightened_tp:.4f}"
+                        f"price={current_price:.4f} >= TP_tightened={tightened_tp:.4f}"
                     ),
                 )
 
-        # 3) Take profit original: precio alcanza o supera el nivel calculado
+        # 3) Original take profit: price reaches or exceeds the calculated level
         if current_price >= position.take_profit_price:
             self._log.info(
-                "TAKE PROFIT alcanzado | trade={} entry={:.3f} now={:.3f} pnl={:+.2%}",
+                "TAKE PROFIT reached | trade={} entry={:.3f} now={:.3f} pnl={:+.2%}",
                 position.trade_id[:8],
                 position.entry_price,
                 current_price,
@@ -302,13 +302,13 @@ class RiskManager:
                 reason=CloseReason.TAKE_PROFIT,
                 pnl_pct=pnl_pct,
                 pnl_eur=pnl_eur,
-                notes=f"Precio {current_price:.4f} >= TP {position.take_profit_price:.4f}",
+                notes=f"Price {current_price:.4f} >= TP {position.take_profit_price:.4f}",
             )
 
-        # 4) TIME EXIT — Tier 2: cerrar si en beneficio tras time_exit_profit_hours
+        # 4) TIME EXIT — Tier 2: close if in profit after time_exit_profit_hours
         if hours_held >= risk.time_exit_profit_hours and pnl_pct >= 0:
             self._log.info(
-                "TIME EXIT (en beneficio) | trade={} held={:.1f}h pnl={:+.2%}",
+                "TIME EXIT (in profit) | trade={} held={:.1f}h pnl={:+.2%}",
                 position.trade_id[:8],
                 hours_held,
                 pnl_pct,
@@ -319,15 +319,15 @@ class RiskManager:
                 pnl_pct=pnl_pct,
                 pnl_eur=pnl_eur,
                 notes=(
-                    f"Cierre por tiempo en beneficio: {hours_held:.1f}h "
+                    f"Time-based close in profit: {hours_held:.1f}h "
                     f">= {risk.time_exit_profit_hours:.0f}h | P&L={pnl_pct:+.2%}"
                 ),
             )
 
-        # 5) TIME EXIT — Tier 3: cierre forzado incondicional tras time_exit_hard_hours
+        # 5) TIME EXIT — Tier 3: unconditional forced close after time_exit_hard_hours
         if hours_held >= risk.time_exit_hard_hours:
             self._log.info(
-                "TIME EXIT (forzado) | trade={} held={:.1f}h pnl={:+.2%}",
+                "TIME EXIT (forced) | trade={} held={:.1f}h pnl={:+.2%}",
                 position.trade_id[:8],
                 hours_held,
                 pnl_pct,
@@ -338,18 +338,18 @@ class RiskManager:
                 pnl_pct=pnl_pct,
                 pnl_eur=pnl_eur,
                 notes=(
-                    f"Cierre forzado por tiempo: {hours_held:.1f}h "
+                    f"Forced time-based close: {hours_held:.1f}h "
                     f">= {risk.time_exit_hard_hours:.0f}h | P&L={pnl_pct:+.2%}"
                 ),
             )
 
-        # Posición sigue dentro de los niveles
+        # Position is still within levels
         return CloseDecision(
             should_close=False,
             reason=None,
             pnl_pct=pnl_pct,
             pnl_eur=pnl_eur,
-            notes="Dentro de niveles",
+            notes="Within levels",
         )
 
     # =====================================================
@@ -386,19 +386,19 @@ class RiskManager:
             if self.risk.pause_on_drawdown:
                 self._is_paused = True
                 self._pause_reason = (
-                    f"Drawdown {drawdown:.2%} supera el límite "
-                    f"{self.risk.max_drawdown_pct:.0%} del capital inicial"
+                    f"Drawdown {drawdown:.2%} exceeds the limit "
+                    f"{self.risk.max_drawdown_pct:.0%} of initial capital"
                 )
                 self._log.error(
-                    "BOT PAUSADO | balance={:.2f}€ inicial={:.2f}€ drawdown={:.2%}",
+                    "BOT PAUSED | balance={:.2f}€ initial={:.2f}€ drawdown={:.2%}",
                     current_balance_eur,
                     self._initial_balance,
                     drawdown,
                 )
             else:
                 self._log.warning(
-                    "Drawdown alert | balance={:.2f}€ inicial={:.2f}€ drawdown={:.2%} "
-                    "(monitoring-only — bot continúa operando)",
+                    "Drawdown alert | balance={:.2f}€ initial={:.2f}€ drawdown={:.2%} "
+                    "(monitoring-only — bot continues operating)",
                     current_balance_eur,
                     self._initial_balance,
                     drawdown,
@@ -413,33 +413,33 @@ class RiskManager:
         )
 
     # =====================================================
-    # Control manual del estado de pausa
+    # Manual pause state control
     # =====================================================
 
     def manually_resume(self) -> None:
-        """Reanuda el bot tras una pausa por drawdown.
+        """Resumes the bot after a drawdown pause.
 
-        Solo debe llamarse desde una intervención manual del operador (CLI o
-        Discord), tras revisar la situación.
+        Should only be called from a manual operator intervention (CLI or
+        Discord), after reviewing the situation.
         """
         if not self._is_paused:
-            self._log.warning("manually_resume() llamado pero el bot no estaba pausado")
+            self._log.warning("manually_resume() called but the bot was not paused")
             return
 
         prev_reason = self._pause_reason
         self._is_paused = False
         self._pause_reason = None
-        # Resetear el peak al balance actual evita auto-pausar inmediatamente
-        # tras reanudar si seguimos en mínimos.
-        # El operador puede llamar a reset_peak() también si lo prefiere.
-        self._log.info("Bot reanudado manualmente. Razón previa: {}", prev_reason)
+        # Resetting the peak to the current balance avoids immediately re-pausing
+        # after resuming if we are still at the low.
+        # The operator can also call reset_peak() if preferred.
+        self._log.info("Bot resumed manually. Previous reason: {}", prev_reason)
 
     def reset_peak(self, new_peak: float) -> None:
-        """Resetea el peak balance. Útil al reanudar tras drawdown."""
+        """Resets the peak balance. Useful when resuming after a drawdown."""
         if new_peak <= 0:
-            raise ValueError("El peak balance debe ser positivo")
+            raise ValueError("Peak balance must be positive")
         self._log.info(
-            "Peak balance reseteado: {:.2f}€ → {:.2f}€",
+            "Peak balance reset: {:.2f}€ → {:.2f}€",
             self._peak_balance,
             new_peak,
         )

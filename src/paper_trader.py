@@ -1,33 +1,33 @@
 """
-Paper Trader — el ejecutor de órdenes simuladas.
+Paper Trader — the simulated order executor.
 
-Responsabilidades:
-1. Recibir un `TradeDecision` con `action=OPEN_TRADE` y simular la ejecución:
-   - aplicar slippage configurado al precio de entrada
-   - calcular `tokens_quantity = size_usd / precio_efectivo`
-   - apartar el dinero del balance virtual
-   - crear y persistir una `Position` abierta
+Responsibilities:
+1. Receive a `TradeDecision` with `action=OPEN_TRADE` and simulate execution:
+   - apply configured slippage to the entry price
+   - calculate `tokens_quantity = size_usd / effective_price`
+   - set aside the money from the virtual balance
+   - create and persist an open `Position`
 
-2. Cerrar posiciones (por SL, TP, news reversal, manual):
-   - aplicar slippage en sentido contrario
-   - calcular P&L en EUR y %
-   - devolver el dinero al balance + el P&L
+2. Close positions (by SL, TP, news reversal, manual):
+   - apply slippage in the opposite direction
+   - calculate P&L in EUR and %
+   - return the money to the balance + P&L
 
-3. Mantener balance virtual + lista de posiciones abiertas en memoria,
-   reflejados en SQLite (recuperación tras reinicio).
+3. Maintain virtual balance + list of open positions in memory,
+   reflected in SQLite (recovery after restart).
 
-4. Reanudación automática: al arrancar, lee posiciones abiertas del SQLite.
+4. Automatic resumption: on startup, reads open positions from SQLite.
 
-P&L en Polymarket (importante):
-- Cada lado YES/NO es un token independiente con precio entre $0 y $1.
-- Compras `Q = size_usd / price_in` tokens al abrir.
-- Cierras vendiendo Q tokens al precio de salida.
+P&L on Polymarket (important):
+- Each YES/NO side is an independent token with a price between $0 and $1.
+- Buy `Q = size_usd / price_in` tokens when opening.
+- Close by selling Q tokens at the exit price.
 - pnl_usd = Q * (price_out - price_in) * (1 - slippage_out) - Q * price_in * slippage_in
-  Simplificado: usamos slippage adverso en ambos extremos (BUY más caro, SELL más barato).
+  Simplified: we apply adverse slippage at both ends (BUY more expensive, SELL cheaper).
 
-Nota sobre comisiones: Polymarket no cobra comisiones por trade hoy en día,
-solo gas en Polygon, que en paper trading no aplica. Si en el futuro se
-introducen, basta con habilitar `polymarket.trading_fee_pct` > 0.
+Note on fees: Polymarket currently charges no trading fees,
+only gas on Polygon, which does not apply in paper trading. If fees are
+introduced in the future, simply enable `polymarket.trading_fee_pct` > 0.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from src.risk_manager import RiskManager
 
 
 class PaperTrader:
-    """Simulador de ejecución de órdenes y gestor de balance virtual."""
+    """Simulated order executor and virtual balance manager."""
 
     def __init__(
         self,
@@ -67,25 +67,25 @@ class PaperTrader:
         self._fee = config.polymarket.trading_fee_pct
         self._eur_to_usd = config.paper_trading.eur_to_usd_rate
 
-        # Balance virtual en EUR
+        # Virtual balance in EUR
         self._balance_eur: float = config.paper_trading.initial_balance_eur
 
-        # Posiciones abiertas en memoria (también en DB)
+        # Open positions in memory (also in DB)
         self._open_positions: dict[str, Position] = {}
 
         self._log = logger.bind(module="paper_trader")
 
-        # Restaurar estado si hay datos previos
+        # Restore state if previous data exists
         self._restore_from_db()
 
         self._log.info(
-            "PaperTrader inicializado: balance={:.2f}€, posiciones_abiertas={}",
+            "PaperTrader initialized: balance={:.2f}€, open_positions={}",
             self._balance_eur,
             len(self._open_positions),
         )
 
     # =====================================================
-    # Estado
+    # State
     # =====================================================
 
     @property
@@ -101,22 +101,22 @@ class PaperTrader:
         return len(self._open_positions)
 
     # =====================================================
-    # Ejecución: abrir
+    # Execution: open
     # =====================================================
 
     def execute_decision(self, decision: TradeDecision) -> Optional[Position]:
-        """Ejecuta un TradeDecision si action==OPEN_TRADE.
+        """Executes a TradeDecision if action==OPEN_TRADE.
 
-        Devuelve la Position creada, o None si la decision era NO_TRADE o si
-        algo falló (no debería: el DECISION_ENGINE ya validó todo).
+        Returns the created Position, or None if the decision was NO_TRADE or if
+        something failed (should not happen: the DECISION_ENGINE already validated everything).
         """
-        # Persistir la decisión SIEMPRE (sea OPEN_TRADE o NO_TRADE) para auditoría
+        # Always persist the decision (whether OPEN_TRADE or NO_TRADE) for auditing
         self.db.log_decision(decision)
 
         if decision.action != DecisionAction.OPEN_TRADE:
             return None
 
-        # Comprobaciones defensivas (no deberían fallar si DecisionEngine hizo su trabajo)
+        # Defensive checks (should not fail if DecisionEngine did its job)
         if (
             decision.side is None
             or decision.token_id is None
@@ -126,28 +126,28 @@ class PaperTrader:
             or decision.take_profit_price is None
         ):
             self._log.error(
-                "TradeDecision OPEN_TRADE incompleta: {}", decision
+                "Incomplete OPEN_TRADE TradeDecision: {}", decision
             )
             return None
 
         if decision.size_eur > self._balance_eur:
             self._log.error(
-                "Balance insuficiente: necesita {:.2f}€, hay {:.2f}€",
+                "Insufficient balance: needs {:.2f}€, available {:.2f}€",
                 decision.size_eur,
                 self._balance_eur,
             )
             return None
 
-        # Aplicar slippage al precio de entrada (paga más alto en BUY)
+        # Apply slippage to the entry price (pay more on BUY)
         effective_price = self._apply_buy_slippage(decision.entry_price)
 
-        # Calcular cantidades
+        # Calculate quantities
         size_usd = decision.size_eur * self._eur_to_usd
-        # Comisión (0% por ahora en Polymarket, parametrizado por si cambia)
+        # Fee (currently 0% on Polymarket, parameterized in case it changes)
         size_usd_after_fee = size_usd * (1 - self._fee)
         tokens_quantity = size_usd_after_fee / effective_price
 
-        # Construir posición
+        # Build position
         position = Position(
             market_question=decision.market_question,
             market_slug=decision.market_slug,
@@ -165,17 +165,17 @@ class PaperTrader:
             confidence=decision.confidence,
         )
 
-        # Mover dinero del balance a la posición
+        # Move money from balance to position
         self._balance_eur -= decision.size_eur
         self._open_positions[position.trade_id] = position
 
-        # Persistir
+        # Persist
         self.db.insert_trade(position)
         self._log_balance_event("TRADE_OPEN")
 
         self._log.info(
-            "ABIERTA | trade={} | {} @ {:.4f} (slippage from {:.4f}) | "
-            "size={:.2f}€ | tokens={:.2f} | balance restante={:.2f}€",
+            "OPENED | trade={} | {} @ {:.4f} (slippage from {:.4f}) | "
+            "size={:.2f}€ | tokens={:.2f} | remaining balance={:.2f}€",
             position.trade_id[:8],
             position.side.value,
             effective_price,
@@ -187,7 +187,7 @@ class PaperTrader:
         return position
 
     # =====================================================
-    # Ejecución: cerrar
+    # Execution: close
     # =====================================================
 
     def close_position(
@@ -197,42 +197,42 @@ class PaperTrader:
         reason: CloseReason,
         notes: str = "",
     ) -> Optional[Position]:
-        """Cierra una posición y devuelve el dinero (con P&L) al balance.
+        """Closes a position and returns the money (with P&L) to the balance.
 
-        `current_market_price` es el precio del MERCADO (no el efectivo de
-        salida). Aplicamos slippage adverso para obtener el precio real.
+        `current_market_price` is the MARKET price (not the effective exit price).
+        Adverse slippage is applied to obtain the real price.
         """
         position = self._open_positions.get(trade_id)
         if position is None:
-            self._log.warning("close_position: trade_id {} no abierto", trade_id)
+            self._log.warning("close_position: trade_id {} not open", trade_id)
             return None
 
         if not (0 < current_market_price < 1):
             self._log.warning(
-                "close_position: precio {} fuera de rango (0,1). Ajustando.",
+                "close_position: price {} out of range (0,1). Clamping.",
                 current_market_price,
             )
             current_market_price = max(0.001, min(0.999, current_market_price))
 
-        # Slippage adverso en SELL (cobras menos)
+        # Adverse slippage on SELL (receive less)
         effective_exit_price = self._apply_sell_slippage(current_market_price)
 
-        # P&L sobre los tokens poseídos
-        # NOTA: la fórmula usa los precios efectivos (slippage ya aplicado).
-        # Esto garantiza que el slippage ya restó al P&L.
+        # P&L on held tokens
+        # NOTE: the formula uses effective prices (slippage already applied).
+        # This ensures slippage has already been deducted from the P&L.
         pnl_per_token = effective_exit_price - position.entry_price
         pnl_usd = pnl_per_token * position.tokens_quantity
-        # Restar comisión de salida si aplica
+        # Deduct exit fee if applicable
         pnl_usd_after_fee = pnl_usd - (
             position.tokens_quantity * effective_exit_price * self._fee
         )
         pnl_eur = pnl_usd_after_fee / self._eur_to_usd
         pnl_pct = (effective_exit_price - position.entry_price) / position.entry_price
 
-        # Devolver el principal + P&L al balance
+        # Return principal + P&L to balance
         self._balance_eur += position.size_eur + pnl_eur
 
-        # Marcar la posición como cerrada
+        # Mark position as closed
         position.status = TradeStatus.CLOSED
         position.exit_price = effective_exit_price
         position.exit_timestamp = datetime.now(timezone.utc)
@@ -241,17 +241,17 @@ class PaperTrader:
         position.pnl_pct = pnl_pct
         position.exit_reason_text = notes or reason.value
 
-        # Quitar del diccionario y persistir
+        # Remove from dictionary and persist
         del self._open_positions[trade_id]
         self.db.update_trade_close(position)
         self._log_balance_event("TRADE_CLOSE")
 
-        # Actualizar drawdown del RiskManager
+        # Update RiskManager drawdown
         self.risk_manager.update_balance_and_check_drawdown(self._balance_eur)
 
         outcome = "GAIN" if pnl_eur >= 0 else "LOSS"
         self._log.info(
-            "CERRADA | trade={} | {} | reason={} | entry={:.4f} → exit={:.4f} | "
+            "CLOSED | trade={} | {} | reason={} | entry={:.4f} → exit={:.4f} | "
             "P&L={:+.2f}€ ({:+.2%}) | balance={:.2f}€",
             position.trade_id[:8],
             outcome,
@@ -270,14 +270,14 @@ class PaperTrader:
         reason: CloseReason = CloseReason.MANUAL,
         notes: str = "Mass close",
     ) -> list[Position]:
-        """Cierra todas las posiciones abiertas. `current_prices` es {token_id: price}."""
+        """Closes all open positions. `current_prices` is {token_id: price}."""
         closed: list[Position] = []
         for trade_id in list(self._open_positions.keys()):
             position = self._open_positions[trade_id]
             price = current_prices.get(position.token_id)
             if price is None:
                 self._log.warning(
-                    "close_all_positions: no hay precio para token {} (trade={})",
+                    "close_all_positions: no price for token {} (trade={})",
                     position.token_id,
                     trade_id[:8],
                 )
@@ -292,18 +292,18 @@ class PaperTrader:
     # =====================================================
 
     def _apply_buy_slippage(self, market_price: float) -> float:
-        """Comprando pagas más caro: precio efectivo > precio de mercado."""
+        """Buying costs more: effective price > market price."""
         effective = market_price * (1 + self._slippage)
-        # Cap a 0.999 para no salirse del rango
+        # Cap at 0.999 to stay within valid range
         return min(effective, 0.999)
 
     def _apply_sell_slippage(self, market_price: float) -> float:
-        """Vendiendo cobras más barato: precio efectivo < precio de mercado."""
+        """Selling receives less: effective price < market price."""
         effective = market_price * (1 - self._slippage)
         return max(effective, 0.001)
 
     def _log_balance_event(self, event: str) -> None:
-        """Registra un snapshot del balance en la tabla balance_history."""
+        """Records a balance snapshot in the balance_history table."""
         try:
             status = self.risk_manager.update_balance_and_check_drawdown(
                 self._balance_eur
@@ -316,43 +316,43 @@ class PaperTrader:
                 event=event,
             )
         except Exception as exc:
-            self._log.warning("_log_balance_event falló: {}", exc)
+            self._log.warning("_log_balance_event failed: {}", exc)
 
     # =====================================================
-    # Restauración de estado
+    # State restoration
     # =====================================================
 
     def _restore_from_db(self) -> None:
-        """Recupera posiciones abiertas y balance al arrancar."""
-        # 1) Recuperar posiciones abiertas
+        """Recovers open positions and balance on startup."""
+        # 1) Recover open positions
         open_positions = self.db.get_open_positions()
         for pos in open_positions:
             self._open_positions[pos.trade_id] = pos
 
         if not open_positions:
-            # Bot fresco: registrar balance inicial
+            # Fresh bot: record initial balance
             self._log_balance_event("INIT")
             return
 
-        # 2) Recalcular balance: balance_inicial - sum(size_eur de posiciones abiertas)
-        # Esto es una aproximación: si en el pasado cerramos posiciones con P&L,
-        # el balance debería incluirlas. Lo correcto es buscar el último
-        # snapshot de balance_history.
+        # 2) Recalculate balance: initial_balance - sum(size_eur of open positions)
+        # This is an approximation: if we previously closed positions with P&L,
+        # the balance should include them. The correct approach is to look up
+        # the last balance_history snapshot.
         history = self.db.get_balance_history()
         if history:
             self._balance_eur = float(history[-1]["balance_eur"])
             self._log.info(
-                "Balance recuperado del último snapshot: {:.2f}€",
+                "Balance recovered from last snapshot: {:.2f}€",
                 self._balance_eur,
             )
         else:
-            # Fallback defensivo
+            # Defensive fallback
             consumed = sum(p.size_eur for p in open_positions)
             self._balance_eur = (
                 self.config.paper_trading.initial_balance_eur - consumed
             )
             self._log.warning(
-                "Sin balance_history en DB; balance recalculado: {:.2f}€",
+                "No balance_history in DB; balance recalculated: {:.2f}€",
                 self._balance_eur,
             )
 

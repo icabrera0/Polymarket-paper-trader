@@ -1,24 +1,24 @@
 """
-Report Generator — informes Excel diarios del paper trading.
+Report Generator — daily Excel reports for paper trading.
 
-Genera un .xlsx con 5 hojas:
+Generates a .xlsx with 5 sheets:
 
-  1. Resumen Ejecutivo  — KPIs del día (balance, P&L, win rate, drawdown)
-  2. Trades Detallados  — todas las posiciones cerradas hoy + abiertas vivas
-  3. Análisis del LLM   — todos los MarketAnalysis del día con tokens consumidos
-  4. Decisiones         — log completo (incluyendo NO_TRADE) para auditoría
-  5. Evolución Balance  — curva de equity con gráfico
+  1. Executive Summary  — daily KPIs (balance, P&L, win rate, drawdown)
+  2. Detailed Trades    — all positions closed today + open live ones
+  3. LLM Analyses       — all MarketAnalysis for the day with token usage
+  4. Decisions          — full decision log (including NO_TRADE) for auditing
+  5. Balance Evolution  — equity curve with chart
 
-Decisiones de diseño:
-- openpyxl porque necesitamos formato condicional + gráficos.
-- Formulas Excel para totales (SUM, AVERAGE, COUNTIF) — NO hardcodear cálculos.
-- Formato condicional verde/rojo en columnas P&L.
-- Gráfico de línea para evolución de balance.
-- Gráfico de barras para P&L por mercado.
+Design decisions:
+- openpyxl because we need conditional formatting + charts.
+- Excel formulas for totals (SUM, AVERAGE, COUNTIF) — do NOT hardcode calculations.
+- Conditional green/red formatting on P&L columns.
+- Line chart for balance evolution.
+- Bar chart for P&L by market.
 - Filename: `YYYY-MM-DD_report.xlsx`.
 
-El reporte se regenera por completo cada vez (no se actualiza incremental).
-Para tiempo real usaremos el dashboard Streamlit en el módulo 11.
+The report is fully regenerated each time (no incremental updates).
+For real-time use we rely on the Streamlit dashboard in module 11.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from src.database import Database
 
 
 # =====================================================
-# Estilos
+# Styles
 # =====================================================
 
 FONT_BASE = Font(name="Arial", size=10)
@@ -71,7 +71,7 @@ RIGHT = Alignment(horizontal="right", vertical="center")
 
 
 class ReportGenerator:
-    """Genera el reporte Excel del paper trading."""
+    """Generates the paper trading Excel report."""
 
     def __init__(self, config: BotConfig, db: Database) -> None:
         self.config = config
@@ -90,11 +90,11 @@ class ReportGenerator:
         self,
         target_date: Optional[datetime] = None,
     ) -> Path:
-        """Genera el reporte para `target_date` (o hoy UTC si None)."""
+        """Generates the report for `target_date` (or today UTC if None)."""
         if target_date is None:
             target_date = datetime.now(timezone.utc)
 
-        # Rango: 00:00 UTC de target_date hasta 23:59:59 UTC
+        # Range: 00:00 UTC of target_date to 23:59:59 UTC
         day_start = datetime.combine(
             target_date.date(), time.min, tzinfo=timezone.utc
         )
@@ -104,11 +104,11 @@ class ReportGenerator:
         fname = target_date.strftime(self.cfg.filename_format)
         out_path = self.output_dir / fname
 
-        # Datos de la DB
+        # Data from DB
         all_trades = self.db.get_all_trades()
         balance_history = self.db.get_balance_history()
 
-        # Trades del día (entrada O salida en el rango)
+        # Today's trades (entry OR exit within range)
         trades_today = [
             t for t in all_trades
             if (
@@ -117,9 +117,9 @@ class ReportGenerator:
             )
         ]
 
-        # Crear workbook
+        # Create workbook
         wb = Workbook()
-        wb.remove(wb.active)  # Borrar la hoja inicial
+        wb.remove(wb.active)  # Remove the default sheet
 
         self._sheet_executive_summary(wb, day_start, day_end, trades_today, balance_history)
         self._sheet_trades_detail(wb, trades_today, all_trades)
@@ -128,39 +128,39 @@ class ReportGenerator:
         self._sheet_balance_evolution(wb, balance_history)
 
         wb.save(out_path)
-        self._log.info("Reporte generado: {}", out_path)
+        self._log.info("Report generated: {}", out_path)
         return out_path
 
     # =====================================================
-    # Hoja 1: Resumen Ejecutivo
+    # Sheet 1: Executive Summary
     # =====================================================
 
     def _sheet_executive_summary(
         self, wb: Workbook, day_start: datetime, day_end: datetime,
         trades_today: list, balance_history: list,
     ) -> None:
-        ws = wb.create_sheet("Resumen Ejecutivo")
+        ws = wb.create_sheet("Executive Summary")
 
-        # Título
-        ws["A1"] = f"Reporte Paper Trading — {day_start.strftime('%Y-%m-%d')}"
+        # Title
+        ws["A1"] = f"Paper Trading Report — {day_start.strftime('%Y-%m-%d')}"
         ws["A1"].font = FONT_TITLE
         ws.merge_cells("A1:D1")
 
-        ws["A2"] = "Generado:"
+        ws["A2"] = "Generated:"
         ws["B2"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-        # Cabecera de KPIs
+        # KPI header
         row = 4
-        ws[f"A{row}"] = "MÉTRICAS DEL DÍA"
+        ws[f"A{row}"] = "DAILY METRICS"
         ws[f"A{row}"].font = FONT_HEADER
         ws[f"A{row}"].fill = FILL_HEADER
         ws.merge_cells(f"A{row}:D{row}")
         row += 1
 
-        # Calcular KPIs (formulas no aplica aquí, los datos están en otras hojas)
-        # Pero los valores finales SÍ los referenciamos para que sean dinámicos.
+        # Calculate KPIs (formulas do not apply here; data lives in other sheets)
+        # But we DO reference the final values so they are dynamic.
 
-        # Balance inicial / final del día
+        # Start / end balance for the day
         balance_start, balance_end = self._get_day_balance_bounds(
             balance_history, day_start, day_end,
         )
@@ -177,18 +177,18 @@ class ReportGenerator:
         win_rate = len(winners) / len(closed_today) if closed_today else 0.0
 
         kpis = [
-            ("Balance inicial del día", balance_start, "€"),
-            ("Balance final del día", balance_end, "€"),
-            ("P&L día", total_pnl_eur, "€"),
-            ("P&L día %",
+            ("Day Starting Balance", balance_start, "€"),
+            ("Day Ending Balance", balance_end, "€"),
+            ("Daily P&L", total_pnl_eur, "€"),
+            ("Daily P&L %",
              (total_pnl_eur / balance_start) if balance_start > 0 else 0,
              "%"),
-            ("Trades cerrados", len(closed_today), ""),
-            ("Trades ganadores", len(winners), ""),
-            ("Trades perdedores", len(losers), ""),
-            ("Win rate", win_rate, "%"),
-            ("Peak balance del día", peak_today, "€"),
-            ("Drawdown máx del día", max_drawdown_today, "%"),
+            ("Closed Trades", len(closed_today), ""),
+            ("Winning Trades", len(winners), ""),
+            ("Losing Trades", len(losers), ""),
+            ("Win Rate", win_rate, "%"),
+            ("Day Peak Balance", peak_today, "€"),
+            ("Day Max Drawdown", max_drawdown_today, "%"),
         ]
 
         for label, value, unit in kpis:
@@ -208,8 +208,8 @@ class ReportGenerator:
             ws[f"B{row}"].font = FONT_BASE
             row += 1
 
-        # Aplicar color condicional al P&L
-        pnl_row = 4 + 1 + 3  # offset de cabecera + posición de "P&L día"
+        # Conditional color on P&L
+        pnl_row = 4 + 1 + 3  # header offset + position of "Daily P&L"
         ws[f"B{pnl_row}"].fill = (
             FILL_GAIN if total_pnl_eur >= 0 else FILL_LOSS
         )
@@ -217,28 +217,28 @@ class ReportGenerator:
             FILL_GAIN if total_pnl_eur >= 0 else FILL_LOSS
         )
 
-        # Anchos
+        # Column widths
         ws.column_dimensions["A"].width = 30
         ws.column_dimensions["B"].width = 18
         ws.column_dimensions["C"].width = 12
         ws.column_dimensions["D"].width = 12
 
     # =====================================================
-    # Hoja 2: Trades Detallados
+    # Sheet 2: Detailed Trades
     # =====================================================
 
     def _sheet_trades_detail(
         self, wb: Workbook, trades_today: list, all_trades: list,
     ) -> None:
-        ws = wb.create_sheet("Trades Detallados")
+        ws = wb.create_sheet("Detailed Trades")
 
         headers = [
-            "Trade ID", "Entrada", "Salida", "Mercado", "Token", "Lado",
-            "Precio entrada", "Precio salida", "Tokens", "Tamaño €",
-            "P&L €", "P&L %", "Duración (h)", "Motivo cierre",
-            "Confianza", "Estado", "Notas",
+            "Trade ID", "Entry", "Exit", "Market", "Token", "Side",
+            "Entry Price", "Exit Price", "Tokens", "Size €",
+            "P&L €", "P&L %", "Duration (h)", "Close Reason",
+            "Confidence", "Status", "Notes",
         ]
-        # Cabeceras
+        # Headers
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=header)
             cell.font = FONT_HEADER
@@ -246,7 +246,7 @@ class ReportGenerator:
             cell.alignment = CENTER
             cell.border = BORDER_THIN
 
-        # Datos
+        # Data
         for r_idx, t in enumerate(trades_today, 2):
             duration_h = ""
             if t.exit_timestamp and t.entry_timestamp:
@@ -278,14 +278,14 @@ class ReportGenerator:
                 cell.font = FONT_BASE
                 cell.border = BORDER_THIN
 
-            # Format de números
-            ws.cell(row=r_idx, column=7).number_format = "0.0000"      # Precio entrada
-            ws.cell(row=r_idx, column=8).number_format = "0.0000"      # Precio salida
-            ws.cell(row=r_idx, column=10).number_format = "€#,##0.00"  # Tamaño
+            # Number formats
+            ws.cell(row=r_idx, column=7).number_format = "0.0000"      # Entry price
+            ws.cell(row=r_idx, column=8).number_format = "0.0000"      # Exit price
+            ws.cell(row=r_idx, column=10).number_format = "€#,##0.00"  # Size
             ws.cell(row=r_idx, column=11).number_format = '€#,##0.00;[Red]-€#,##0.00'  # P&L €
             ws.cell(row=r_idx, column=12).number_format = "0.00%"      # P&L %
 
-        # Tabla con filtros automáticos (si hay datos)
+        # Table with auto-filters (if data exists)
         if trades_today:
             n_rows = len(trades_today) + 1
             n_cols = len(headers)
@@ -298,9 +298,9 @@ class ReportGenerator:
                 )
                 ws.add_table(tbl)
             except Exception as exc:
-                self._log.debug("Tabla no aplicada (probablemente sin filas): {}", exc)
+                self._log.debug("Table not applied (probably no rows): {}", exc)
 
-            # Formato condicional en columnas P&L (K=11, L=12)
+            # Conditional formatting on P&L columns (K=11, L=12)
             for col_letter, col_idx in [("K", 11), ("L", 12)]:
                 rng = f"{col_letter}2:{col_letter}{n_rows}"
                 ws.conditional_formatting.add(
@@ -320,26 +320,26 @@ class ReportGenerator:
                     ),
                 )
 
-        # Anchos
+        # Column widths
         widths = [12, 18, 18, 50, 16, 10, 14, 14, 10, 12, 12, 10, 14, 14, 10, 10, 50]
         for col_idx, w in enumerate(widths, 1):
             ws.column_dimensions[get_column_letter(col_idx)].width = w
 
     # =====================================================
-    # Hoja 3: Análisis del LLM
+    # Sheet 3: LLM Analyses
     # =====================================================
 
     def _sheet_llm_analyses(
         self, wb: Workbook, day_start: datetime, day_end: datetime,
     ) -> None:
-        ws = wb.create_sheet("Análisis LLM")
+        ws = wb.create_sheet("LLM Analyses")
 
         headers = [
-            "Timestamp", "Mercado", "Precio YES", "Prob. consensus",
-            "Edge", "Confianza", "Sentiment", "Impact",
-            "Recomendación", "Timeframe", "Contradicciones",
-            "Nº noticias", "Modelo LLM", "Tokens IN", "Tokens OUT",
-            "Resumen",
+            "Timestamp", "Market", "YES Price", "Consensus Prob.",
+            "Edge", "Confidence", "Sentiment", "Impact",
+            "Recommendation", "Timeframe", "Contradictions",
+            "# Articles", "LLM Model", "Tokens IN", "Tokens OUT",
+            "Summary",
         ]
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=header)
@@ -358,7 +358,7 @@ class ReportGenerator:
             )
             rows = cur.fetchall()
         except Exception as exc:
-            self._log.warning("No se pudo leer analyses_log: {}", exc)
+            self._log.warning("Could not read analyses_log: {}", exc)
             rows = []
 
         for r_idx, row in enumerate(rows, 2):
@@ -373,7 +373,7 @@ class ReportGenerator:
                 row["impact_score"],
                 row["recommendation"],
                 row["timeframe"],
-                "Sí" if row["contradictory_sources"] else "No",
+                "Yes" if row["contradictory_sources"] else "No",
                 row["num_articles_analyzed"],
                 row["llm_model"],
                 row["llm_input_tokens"],
@@ -385,14 +385,14 @@ class ReportGenerator:
                 cell.font = FONT_BASE
                 cell.border = BORDER_THIN
 
-            # Formatos
+            # Formats
             ws.cell(row=r_idx, column=3).number_format = "0.000"
             ws.cell(row=r_idx, column=4).number_format = "0.000"
             ws.cell(row=r_idx, column=5).number_format = "0.000"
             ws.cell(row=r_idx, column=7).number_format = "0.00"
             ws.cell(row=r_idx, column=8).number_format = "0"
 
-        # Color scale en confianza (col 6)
+        # Color scale on confidence (col 6)
         if rows:
             n_rows = len(rows) + 1
             ws.conditional_formatting.add(
@@ -403,7 +403,7 @@ class ReportGenerator:
                     end_type="num", end_value=100, end_color="63BE7B",
                 ),
             )
-            # Edge: verde positivo, rojo negativo
+            # Edge: green positive, red negative
             ws.conditional_formatting.add(
                 f"E2:E{n_rows}",
                 CellIsRule(operator="lessThan", formula=["0"], fill=FILL_LOSS),
@@ -418,17 +418,17 @@ class ReportGenerator:
             ws.column_dimensions[get_column_letter(col_idx)].width = w
 
     # =====================================================
-    # Hoja 4: Decisiones (todas)
+    # Sheet 4: Decisions (all)
     # =====================================================
 
     def _sheet_decisions_log(
         self, wb: Workbook, day_start: datetime, day_end: datetime,
     ) -> None:
-        ws = wb.create_sheet("Decisiones")
+        ws = wb.create_sheet("Decisions")
 
         headers = [
-            "Timestamp", "Acción", "Mercado", "Lado", "Tamaño €",
-            "Confianza", "Edge", "Skip reasons", "Justificación",
+            "Timestamp", "Action", "Market", "Side", "Size €",
+            "Confidence", "Edge", "Skip Reasons", "Rationale",
         ]
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=header)
@@ -447,7 +447,7 @@ class ReportGenerator:
             )
             rows = cur.fetchall()
         except Exception as exc:
-            self._log.warning("No se pudo leer decisions_log: {}", exc)
+            self._log.warning("Could not read decisions_log: {}", exc)
             rows = []
 
         for r_idx, row in enumerate(rows, 2):
@@ -470,7 +470,7 @@ class ReportGenerator:
             ws.cell(row=r_idx, column=5).number_format = "€#,##0.00"
             ws.cell(row=r_idx, column=7).number_format = "0.000"
 
-            # Resaltar OPEN_TRADE en verde
+            # Highlight OPEN_TRADE in green
             if row["action"] == "OPEN_TRADE":
                 ws.cell(row=r_idx, column=2).fill = FILL_GAIN
 
@@ -479,14 +479,14 @@ class ReportGenerator:
             ws.column_dimensions[get_column_letter(col_idx)].width = w
 
     # =====================================================
-    # Hoja 5: Evolución del Balance
+    # Sheet 5: Balance Evolution
     # =====================================================
 
     def _sheet_balance_evolution(self, wb: Workbook, balance_history: list) -> None:
-        ws = wb.create_sheet("Evolución Balance")
+        ws = wb.create_sheet("Balance Evolution")
 
         headers = ["Timestamp", "Balance €", "Peak €", "Drawdown %",
-                   "Posiciones abiertas", "Evento"]
+                   "Open Positions", "Event"]
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=header)
             cell.font = FONT_HEADER
@@ -511,7 +511,7 @@ class ReportGenerator:
             ws.cell(row=r_idx, column=3).number_format = "€#,##0.00"
             ws.cell(row=r_idx, column=4).number_format = "0.00%"
 
-        # Color scale en drawdown
+        # Color scale on drawdown
         if balance_history:
             n_rows = len(balance_history) + 1
             ws.conditional_formatting.add(
@@ -523,12 +523,12 @@ class ReportGenerator:
                 ),
             )
 
-            # Gráfico de línea: balance + peak
+            # Line chart: balance + peak
             chart = LineChart()
-            chart.title = "Evolución del balance"
+            chart.title = "Balance evolution"
             chart.style = 12
             chart.y_axis.title = "EUR"
-            chart.x_axis.title = "Tiempo"
+            chart.x_axis.title = "Time"
 
             data = Reference(
                 ws,
@@ -547,17 +547,17 @@ class ReportGenerator:
             ws.column_dimensions[get_column_letter(col_idx)].width = w
 
     # =====================================================
-    # Helpers de KPI
+    # KPI helpers
     # =====================================================
 
     @staticmethod
     def _get_day_balance_bounds(
         history: list, day_start: datetime, day_end: datetime,
     ) -> tuple[float, float]:
-        """Devuelve (balance_inicial, balance_final) del día."""
+        """Returns (start_balance, end_balance) for the day."""
         if not history:
             return 0.0, 0.0
-        # Último balance ANTES de day_start (o el primero si todo es del día)
+        # Last balance BEFORE day_start (or the first one if everything is within the day)
         before = [h for h in history if h["timestamp"] < day_start.isoformat()]
         within = [
             h for h in history

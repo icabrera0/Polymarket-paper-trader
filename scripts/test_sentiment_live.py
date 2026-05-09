@@ -1,24 +1,24 @@
 """
-Prueba en vivo del SENTIMENT_ANALYZER con Claude API real.
+Live test of the SENTIMENT_ANALYZER with the real Claude API.
 
-Ejecuta el pipeline completo:
-1. Escanea mercados de Polymarket
-2. Selecciona los TOP N por volumen (N=3 por defecto, configurable)
-3. Para cada mercado: extrae keywords y busca noticias
-4. Pasa cada (mercado, noticias) a Claude para análisis cuantitativo
-5. Imprime el JSON resultado por mercado y los tokens consumidos
+Runs the full pipeline:
+1. Scans Polymarket markets
+2. Selects the TOP N by volume (N=3 by default, configurable)
+3. For each market: extracts keywords and searches for news
+4. Passes each (market, news) to Claude for quantitative analysis
+5. Prints the resulting JSON per market and the tokens consumed
 
-CONSUMO DE TOKENS:
-Esta prueba sí gasta tokens de tu cuenta Anthropic. Estimación con
-claude-sonnet-4-6 a precios actuales (~$3/M input, $15/M output):
-- Input: ~3000 tokens/mercado × 3 mercados = ~9000 tokens (~$0.027)
-- Output: ~300 tokens/mercado × 3 mercados = ~900 tokens (~$0.013)
-- Total: < $0.05 por ejecución
+TOKEN CONSUMPTION:
+This test does spend tokens from your Anthropic account. Estimate with
+claude-sonnet-4-6 at current prices (~$3/M input, $15/M output):
+- Input: ~3000 tokens/market × 3 markets = ~9000 tokens (~$0.027)
+- Output: ~300 tokens/market × 3 markets = ~900 tokens (~$0.013)
+- Total: < $0.05 per run
 
-Ejecutar:
+Run:
     python scripts/test_sentiment_live.py
 
-Requiere ANTHROPIC_API_KEY en .env.
+Requires ANTHROPIC_API_KEY in .env.
 """
 
 from __future__ import annotations
@@ -36,15 +36,15 @@ from src.news_ingestor import NewsIngestor  # noqa: E402
 from src.sentiment_analyzer import SentimentAnalyzer  # noqa: E402
 from src.models import TradeRecommendation  # noqa: E402
 
-# Reutilizamos el extractor de keywords del otro script
+# Reuse the keyword extractor from the other script
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from test_live_integration import extract_keywords  # noqa: E402
 
-# (NUM_MARKETS_TO_ANALYZE viene ahora de config.decision.markets_to_analyze_per_cycle)
+# (NUM_MARKETS_TO_ANALYZE now comes from config.decision.markets_to_analyze_per_cycle)
 
 
 def color_for_recommendation(rec: TradeRecommendation) -> str:
-    """Devuelve un emoji indicativo para el terminal."""
+    """Returns an indicative emoji for the terminal."""
     return {
         TradeRecommendation.COMPRAR_YES: "🟢 BUY YES",
         TradeRecommendation.COMPRAR_NO: "🔴 BUY NO",
@@ -63,36 +63,36 @@ def print_section(title: str) -> None:
 def main() -> None:
     config = load_config()
 
-    # Verificar requisitos según provider
+    # Verify requirements by provider
     if config.llm.provider == "anthropic":
         if not config.anthropic_api_key:
-            print("ERROR: provider='anthropic' pero falta ANTHROPIC_API_KEY en .env")
+            print("ERROR: provider='anthropic' but ANTHROPIC_API_KEY is missing from .env")
             sys.exit(1)
     elif config.llm.provider == "ollama":
-        # Verificación rápida del servidor antes de gastar tiempo
+        # Quick server check before wasting time
         from src.llm_client import OllamaClient, OllamaUnavailable
         try:
             OllamaClient(config).verify_setup()
         except OllamaUnavailable as exc:
             print(f"ERROR Ollama: {exc}")
-            print("Ejecuta primero: python scripts/setup_ollama.py")
+            print("Run first: python scripts/setup_ollama.py")
             sys.exit(1)
     else:
-        print(f"ERROR: provider desconocido: {config.llm.provider}")
+        print(f"ERROR: unknown provider: {config.llm.provider}")
         sys.exit(1)
 
-    print(f"Provider LLM: {config.llm.provider}")
-    print(f"Modelo:       {config.llm.model}")
+    print(f"LLM Provider: {config.llm.provider}")
+    print(f"Model:        {config.llm.model}")
     print()
 
-    # ---------- 1. Escaneo ----------
-    print_section("PASO 1 — Escaneo de mercados")
+    # ---------- 1. Scan ----------
+    print_section("STEP 1 — Market scan")
     scanner = MarketScanner(config)
     markets = scanner.scan(force_refresh=True)
-    print(f"→ {len(markets)} mercados operables")
+    print(f"→ {len(markets)} tradeable markets")
 
     if not markets:
-        print("No hay mercados que pasen los filtros. Aborto.")
+        print("No markets pass the filters. Aborting.")
         return
 
     top = scanner.rank_for_analysis(
@@ -100,13 +100,13 @@ def main() -> None:
         category_boost=config.decision.category_priority_boost,
         top_n=config.decision.markets_to_analyze_per_cycle,
     )
-    print(f"\nAnalizando los TOP {len(top)} (ranking con boost de categoría):")
+    print(f"\nAnalyzing TOP {len(top)} (ranking with category boost):")
     for i, m in enumerate(top, 1):
         print(f"  {i:2}. [{m.category or '?':<12}] {m.question[:55]}")
         print(f"      YES={m.yes_price:.3f} | vol24h=${m.volume_24h_usd:,.0f}")
 
-    # ---------- 2. Noticias por mercado ----------
-    print_section("PASO 2 — Ingesta de noticias por mercado")
+    # ---------- 2. News per market ----------
+    print_section("STEP 2 — News ingestion per market")
     ingestor = NewsIngestor(config)
 
     market_news: dict[str, list] = {}
@@ -124,61 +124,61 @@ def main() -> None:
             fallback_timespan=fallback_lookback,
         )
         market_news[m.market_id] = articles
-        print(f"  '{m.question[:50]}...': {len(articles)} artículos")
+        print(f"  '{m.question[:50]}...': {len(articles)} articles")
 
-    # ---------- 3. Análisis con LLM ----------
+    # ---------- 3. LLM analysis ----------
     provider_label = {
         "anthropic": "Claude",
         "ollama": f"Ollama ({config.llm.model})",
     }.get(config.llm.provider, config.llm.provider)
-    print_section(f"PASO 3 — Análisis con {provider_label}")
+    print_section(f"STEP 3 — Analysis with {provider_label}")
     analyzer = SentimentAnalyzer(config)
 
     for i, m in enumerate(top, 1):
         articles = market_news.get(m.market_id, [])
-        print(f"\n[{i}/{len(top)}] Analizando: {m.question[:60]}")
-        print(f"        Precio actual YES: {m.yes_price:.3f}")
-        print(f"        Artículos disponibles: {len(articles)}")
+        print(f"\n[{i}/{len(top)}] Analyzing: {m.question[:60]}")
+        print(f"        Current YES price: {m.yes_price:.3f}")
+        print(f"        Available articles: {len(articles)}")
 
         analysis = analyzer.analyze(m, articles, force_refresh=True)
 
-        print(f"\n  ┌─ RESULTADO ─────────────────────────────────────")
+        print(f"\n  ┌─ RESULT ─────────────────────────────────────────")
         low_info_tag = " (LOW_INFO)" if analysis.is_low_info else ""
-        print(f"  │ Recomendación:        {color_for_recommendation(analysis.recommendation)}{low_info_tag}")
-        print(f"  │ Probabilidad YES:     {analysis.consensus_probability_yes:.3f}")
-        print(f"  │ Edge sobre precio:    {analysis.edge:+.3f} ({analysis.edge*100:+.1f}pp)")
-        print(f"  │ Confianza:            {analysis.confidence}/100")
+        print(f"  │ Recommendation:       {color_for_recommendation(analysis.recommendation)}{low_info_tag}")
+        print(f"  │ YES probability:      {analysis.consensus_probability_yes:.3f}")
+        print(f"  │ Edge over price:      {analysis.edge:+.3f} ({analysis.edge*100:+.1f}pp)")
+        print(f"  │ Confidence:           {analysis.confidence}/100")
         print(f"  │ Sentiment:            {analysis.sentiment_score:+.2f}")
         print(f"  │ Impact:               {analysis.impact_score:.0f}/100")
         print(f"  │ Timeframe:            {analysis.timeframe.value}")
-        print(f"  │ Fuentes contradicen:  {analysis.contradictory_sources}")
+        print(f"  │ Contradictory sources:{analysis.contradictory_sources}")
         print(f"  │ Tokens (in/out):      {analysis.llm_input_tokens} / {analysis.llm_output_tokens}")
-        print(f"  ├─ Resumen ──────────────────────────────────────")
+        print(f"  ├─ Summary ──────────────────────────────────────────")
         print(f"  │ {analysis.summary}")
-        print(f"  ├─ Justificación ────────────────────────────────")
+        print(f"  ├─ Justification ────────────────────────────────────")
         print(f"  │ {analysis.justification[:300]}")
-        print(f"  └─────────────────────────────────────────────────")
+        print(f"  └─────────────────────────────────────────────────────")
 
-    # ---------- 4. Resumen ----------
-    print_section("PASO 4 — Resumen de la ejecución")
+    # ---------- 4. Summary ----------
+    print_section("STEP 4 — Run summary")
     print(f"  Provider:            {config.llm.provider}")
-    print(f"  Modelo:              {config.llm.model}")
-    print(f"  Llamadas al LLM:     {analyzer.client.total_calls}")
-    print(f"  Tokens INPUT:        {analyzer.client.total_input_tokens:,}")
-    print(f"  Tokens OUTPUT:       {analyzer.client.total_output_tokens:,}")
+    print(f"  Model:               {config.llm.model}")
+    print(f"  LLM calls:           {analyzer.client.total_calls}")
+    print(f"  INPUT tokens:        {analyzer.client.total_input_tokens:,}")
+    print(f"  OUTPUT tokens:       {analyzer.client.total_output_tokens:,}")
 
     if config.llm.provider == "anthropic":
         spent = analyzer.client.daily_spend_usd
         limit = config.llm.daily_spend_limit_usd
-        print(f"  Coste esta ejecución: ~${spent:.4f} USD")
+        print(f"  Cost this run:        ~${spent:.4f} USD")
         if limit > 0:
             remaining = analyzer.client.daily_budget_remaining_usd
-            print(f"  Presupuesto diario:   ${limit:.2f} USD (queda ${remaining:.4f})")
+            print(f"  Daily budget:         ${limit:.2f} USD (${remaining:.4f} remaining)")
         print()
-        print("  Recordatorio: este coste sale de tus créditos pre-cargados en")
-        print("  console.anthropic.com (NO de tu suscripción Claude Pro/Max).")
+        print("  Reminder: this cost comes from your pre-loaded credits at")
+        print("  console.anthropic.com (NOT from your Claude Pro/Max subscription).")
     else:
-        print(f"  Coste:               $0.00 (Ollama es local y gratis)")
+        print(f"  Cost:                $0.00 (Ollama is local and free)")
     print()
 
 

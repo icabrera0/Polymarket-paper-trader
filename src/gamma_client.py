@@ -1,19 +1,19 @@
 """
-Cliente HTTP para la Gamma API de Polymarket.
+HTTP client for the Polymarket Gamma API.
 
-La Gamma API (https://gamma-api.polymarket.com) expone metadata de mercados:
-preguntas, fechas, tokens CLOB, precios actuales y volumen. Es el primer punto
-de entrada del bot — el MARKET_SCANNER consume estos datos crudos y aplica los
-filtros configurados.
+The Gamma API (https://gamma-api.polymarket.com) exposes market metadata:
+questions, dates, CLOB tokens, current prices, and volume. It is the first
+entry point of the bot — the MARKET_SCANNER consumes this raw data and applies
+the configured filters.
 
-Este cliente NO ejecuta órdenes ni accede al order book completo (eso es la
-CLOB API, que se integrará en el módulo PAPER_TRADER).
+This client does NOT execute orders or access the full order book (that is the
+CLOB API, which will be integrated in the PAPER_TRADER module).
 
-Características:
-- Reintentos exponenciales con tenacity (3 intentos, 2-10s de backoff).
-- Paginación automática para recoger todos los mercados activos.
-- User-Agent identificable y timeout configurables.
-- Errores de red se loguean y se relanzan como GammaApiError.
+Features:
+- Exponential retries with tenacity (3 attempts, 2-10s backoff).
+- Automatic pagination to collect all active markets.
+- Configurable identifiable User-Agent and timeout.
+- Network errors are logged and re-raised as GammaApiError.
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ from src.config_loader import BotConfig
 
 
 class GammaApiError(Exception):
-    """Error al comunicarse con la Gamma API."""
+    """Error communicating with the Gamma API."""
 
 
 class GammaApiClient:
-    """Wrapper sincrónico sobre la Gamma API de Polymarket."""
+    """Synchronous wrapper around the Polymarket Gamma API."""
 
     def __init__(self, config: BotConfig) -> None:
         self.config = config
@@ -55,7 +55,7 @@ class GammaApiClient:
         )
 
     # =====================================================
-    # GET genérico con reintentos
+    # Generic GET with retries
     # =====================================================
 
     @retry(
@@ -71,11 +71,11 @@ class GammaApiClient:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            self._log.warning("GET {} falló: {}", url, exc)
+            self._log.warning("GET {} failed: {}", url, exc)
             raise
 
     # =====================================================
-    # Endpoints de alto nivel
+    # High-level endpoints
     # =====================================================
 
     def fetch_markets(
@@ -88,15 +88,15 @@ class GammaApiClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Devuelve mercados crudos (lista de dicts) ordenados por volumen 24h.
+        """Returns raw markets (list of dicts) sorted by 24h volume.
 
         Args:
-            active: solo mercados activos.
-            closed: incluir mercados cerrados.
-            order: campo de ordenación (por defecto volumen 24h).
-            ascending: ascendente o descendente.
-            limit: tamaño de página (máx ~500 según API).
-            offset: para paginar.
+            active: active markets only.
+            closed: include closed markets.
+            order: sort field (default 24h volume).
+            ascending: ascending or descending order.
+            limit: page size (max ~500 per API).
+            offset: for pagination.
         """
         params = {
             "active": str(active).lower(),
@@ -109,10 +109,10 @@ class GammaApiClient:
         try:
             data = self._get("/markets", params=params)
         except (requests.RequestException, RetryError) as exc:
-            raise GammaApiError(f"No se pudieron obtener mercados: {exc}") from exc
+            raise GammaApiError(f"Could not retrieve markets: {exc}") from exc
 
         if not isinstance(data, list):
-            self._log.warning("Respuesta inesperada (no es lista): {}", type(data))
+            self._log.warning("Unexpected response (not a list): {}", type(data))
             return []
         return data
 
@@ -121,10 +121,10 @@ class GammaApiClient:
         max_markets: int = 500,
         page_size: int = 100,
     ) -> list[dict[str, Any]]:
-        """Pagina hasta `max_markets` mercados activos ordenados por volumen.
+        """Paginates up to `max_markets` active markets sorted by volume.
 
-        Para en cuanto la API devuelve menos resultados que el page_size (señal
-        de que hemos llegado al final).
+        Stops as soon as the API returns fewer results than the page_size
+        (signal that we have reached the end).
         """
         all_markets: list[dict[str, Any]] = []
         offset = 0
@@ -136,12 +136,12 @@ class GammaApiClient:
                 break
             all_markets.extend(batch)
             if len(batch) < batch_limit:
-                # No hay más resultados
+                # No more results
                 break
             offset += batch_limit
 
         self._log.debug(
-            "fetch_all_active_markets: {} mercados recogidos en {} páginas",
+            "fetch_all_active_markets: {} markets collected in {} pages",
             len(all_markets),
             (offset // page_size) + 1,
         )
@@ -165,26 +165,26 @@ class GammaApiClient:
             return data if isinstance(data, list) else []
         except (requests.RequestException, RetryError) as exc:
             self._log.warning(
-                "No se pudieron obtener mercados por token IDs: {}", exc
+                "Could not retrieve markets by token IDs: {}", exc
             )
             return []
 
     def fetch_market_by_id(self, market_id: str) -> Optional[dict[str, Any]]:
-        """Devuelve un único mercado por ID, o None si no existe."""
+        """Returns a single market by ID, or None if it does not exist."""
         try:
             data = self._get(f"/markets/{market_id}")
         except (requests.RequestException, RetryError) as exc:
-            self._log.warning("No se pudo obtener mercado {}: {}", market_id, exc)
+            self._log.warning("Could not retrieve market {}: {}", market_id, exc)
             return None
         if isinstance(data, dict):
             return data
         return None
 
     def fetch_market_by_token_id_raw(self, token_id: str) -> Optional[dict[str, Any]]:
-        """Devuelve el mercado que contiene este token CLOB, incluyendo resueltos.
+        """Returns the market containing this CLOB token, including resolved ones.
 
-        Intenta primero sin filtro, luego con closed=true — la Gamma API puede
-        filtrar mercados resueltos por defecto si no se especifica explícitamente.
+        Tries first without a filter, then with closed=true — the Gamma API may
+        filter resolved markets by default if not explicitly specified.
         """
         for extra in ({}, {"closed": "true"}):
             params = {"clobTokenIds": token_id, **extra}

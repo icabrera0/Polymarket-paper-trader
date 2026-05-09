@@ -1,31 +1,31 @@
 """
-Cliente LLM unificado: soporta Anthropic (Claude) y Ollama (local).
+Unified LLM client: supports Anthropic (Claude) and Ollama (local).
 
-La clase base `LLMClient` define el contrato que cualquier proveedor debe
-cumplir. La factory `build_llm_client()` elige la implementación según
+The base class `LLMClient` defines the contract that any provider must
+fulfill. The factory `build_llm_client()` selects the implementation based on
 `config.llm.provider`:
 
-    provider: "anthropic"  → AnthropicClient (cuesta dinero, tope diario)
-    provider: "ollama"     → OllamaClient (gratis, local, sin red externa)
+    provider: "anthropic"  → AnthropicClient (costs money, daily cap)
+    provider: "ollama"     → OllamaClient (free, local, no external network)
 
-El SENTIMENT_ANALYZER habla con la interfaz, no con el proveedor concreto,
-así que cambiar de uno a otro es solo modificar el config.
+The SENTIMENT_ANALYZER talks to the interface, not the concrete provider,
+so switching from one to the other is just a config change.
 
-Características comunes:
-- `complete_json()` con reintentos cuando el JSON viene malformado.
-- Tracking de tokens consumidos para reporte.
-- `extract_json()` con 3 estrategias (parse directo, ```json``` blocks, primer
-  objeto balanceado).
+Common features:
+- `complete_json()` with retries when JSON comes back malformed.
+- Tracking of consumed tokens for reporting.
+- `extract_json()` with 3 strategies (direct parse, ```json``` blocks, first
+  balanced object).
 
 Anthropic-only:
-- Tope de gasto diario en USD (DailyBudgetExceeded).
-- Detección de créditos agotados con info de reset (CreditsExhausted).
-- Throttling 0.5s entre llamadas.
+- Daily spend cap in USD (DailyBudgetExceeded).
+- Detection of exhausted credits with reset info (CreditsExhausted).
+- 0.5s throttling between calls.
 
 Ollama-only:
-- Verificación previa de que el modelo está descargado y el servidor responde.
-- Timeout configurable (los modelos locales pueden ser lentos).
-- "format=json" nativo cuando el modelo lo soporta para forzar JSON válido.
+- Pre-check that the model is downloaded and the server responds.
+- Configurable timeout (local models can be slow).
+- Native "format=json" when the model supports it to force valid JSON.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from tenacity import (
 from src.config_loader import BotConfig
 
 
-# Precios Anthropic en USD por millón de tokens (input, output)
+# Anthropic prices in USD per million tokens (input, output)
 ANTHROPIC_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5":  (1.0, 5.0),
     "claude-sonnet-4-6": (3.0, 15.0),
@@ -60,20 +60,20 @@ ANTHROPIC_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
 
 
 # =====================================================
-# Excepciones
+# Exceptions
 # =====================================================
 
 
 class LLMError(Exception):
-    """Error genérico del LLM (no transitorio)."""
+    """Generic LLM error (non-transient)."""
 
 
 class DailyBudgetExceeded(LLMError):
-    """Tope de gasto diario alcanzado (solo Anthropic)."""
+    """Daily spend cap reached (Anthropic only)."""
 
 
 class CreditsExhausted(LLMError):
-    """La cuenta de Anthropic no tiene créditos."""
+    """The Anthropic account has no credits."""
 
     def __init__(
         self,
@@ -87,34 +87,34 @@ class CreditsExhausted(LLMError):
 
 
 class OllamaUnavailable(LLMError):
-    """Servidor Ollama no responde o el modelo no está descargado."""
+    """Ollama server is not responding or the model is not downloaded."""
 
 
-# Aliases retro-compatibles con el módulo viejo anthropic_client
+# Backward-compatible aliases with the old anthropic_client module
 AnthropicError = LLMError
 
 
 # =====================================================
-# Interfaz base
+# Base interface
 # =====================================================
 
 
 class LLMClient(ABC):
-    """Contrato que cualquier proveedor LLM debe cumplir."""
+    """Contract that any LLM provider must fulfill."""
 
     def __init__(self, config: BotConfig) -> None:
         self.config = config
         self.cfg = config.llm
         self._log = logger.bind(module=self.__class__.__name__)
 
-        # Métricas acumuladas (común a todos los proveedores)
+        # Accumulated metrics (common to all providers)
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
         self.total_calls: int = 0
         # Protects counter increments when multiple threads call complete() concurrently
         self._stats_lock = threading.Lock()
 
-    # ---------- API pública (común) ----------
+    # ---------- Public API (common) ----------
 
     @abstractmethod
     def complete(
@@ -125,7 +125,7 @@ class LLMClient(ABC):
         temperature: Optional[float] = None,
         force_json: bool = False,
     ) -> dict[str, Any]:
-        """Llama al LLM y devuelve {text, input_tokens, output_tokens, ...}."""
+        """Calls the LLM and returns {text, input_tokens, output_tokens, ...}."""
 
     def complete_json(
         self,
@@ -135,11 +135,11 @@ class LLMClient(ABC):
         temperature: Optional[float] = None,
         max_attempts: int = 2,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Como complete() pero parsea la respuesta como JSON.
+        """Like complete() but parses the response as JSON.
 
-        Si el JSON viene malformado, reintenta hasta `max_attempts` veces con
-        un mensaje correctivo. Esto es importante para LLMs locales que pueden
-        equivocarse con el formato. Anthropic suele acertar a la primera.
+        If the JSON comes back malformed, retries up to `max_attempts` times with
+        a corrective message. This is important for local LLMs that may get the
+        format wrong. Anthropic usually gets it right on the first try.
         """
         last_error: Optional[str] = None
         accumulated_meta: dict[str, Any] = {
@@ -155,9 +155,9 @@ class LLMClient(ABC):
             if last_error:
                 current_user_prompt = (
                     f"{user_prompt}\n\n"
-                    f"--- Tu respuesta anterior no fue JSON válido ---\n"
+                    f"--- Your previous response was not valid JSON ---\n"
                     f"Error: {last_error}\n"
-                    f"Devuelve SOLO el JSON, sin texto antes ni después."
+                    f"Return ONLY the JSON, with no text before or after."
                 )
             result = self.complete(
                 system_prompt=system_prompt,
@@ -166,7 +166,7 @@ class LLMClient(ABC):
                 temperature=temperature,
                 force_json=True,
             )
-            # Acumular métricas
+            # Accumulate metrics
             accumulated_meta["input_tokens"] += result.get("input_tokens", 0)
             accumulated_meta["output_tokens"] += result.get("output_tokens", 0)
             accumulated_meta["estimated_cost_usd"] += result.get(
@@ -183,26 +183,26 @@ class LLMClient(ABC):
                 f"{len(result['text'])}"
             )
             self._log.warning(
-                "JSON inválido en intento {}/{}. Texto recibido (primeros 200): {}",
+                "Invalid JSON on attempt {}/{}. Received text (first 200): {}",
                 attempt,
                 max_attempts,
                 result["text"][:200].replace("\n", " "),
             )
 
         raise LLMError(
-            f"Respuesta del LLM no contiene JSON válido tras {max_attempts} intentos. "
-            f"Último error: {last_error}"
+            f"LLM response contains no valid JSON after {max_attempts} attempts. "
+            f"Last error: {last_error}"
         )
 
-    # ---------- Helpers comunes ----------
+    # ---------- Common helpers ----------
 
     @staticmethod
     def extract_json(text: str) -> Optional[dict[str, Any]]:
-        """Intenta extraer un objeto JSON del texto, tolerando prefacios."""
+        """Attempts to extract a JSON object from text, tolerating preamble."""
         if not text:
             return None
 
-        # Estrategia 1: parse directo
+        # Strategy 1: direct parse
         text_stripped = text.strip()
         try:
             result = json.loads(text_stripped)
@@ -211,7 +211,7 @@ class LLMClient(ABC):
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # Estrategia 2: bloque markdown ```json ... ```
+        # Strategy 2: markdown block ```json ... ```
         markdown_match = re.search(
             r"```(?:json)?\s*(\{.*?\})\s*```",
             text,
@@ -225,7 +225,7 @@ class LLMClient(ABC):
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        # Estrategia 3: primer { hasta el } balanceado
+        # Strategy 3: first { to the matching balanced }
         start = text.find("{")
         if start == -1:
             return None
@@ -247,19 +247,19 @@ class LLMClient(ABC):
 
 
 # =====================================================
-# Implementación Anthropic
+# Anthropic implementation
 # =====================================================
 
 
 class AnthropicClient(LLMClient):
-    """Cliente para la API de Anthropic (Claude). Cobra dinero, tope diario."""
+    """Client for the Anthropic API (Claude). Costs money, daily cap."""
 
     def __init__(self, config: BotConfig) -> None:
         super().__init__(config)
         if not config.anthropic_api_key:
             raise LLMError(
-                "Falta ANTHROPIC_API_KEY en .env. Consíguela en "
-                "https://console.anthropic.com (cuenta SEPARADA de tu Claude Pro/Max)."
+                "Missing ANTHROPIC_API_KEY in .env. Get it from "
+                "https://console.anthropic.com (SEPARATE account from your Claude Pro/Max)."
             )
 
         try:
@@ -273,13 +273,13 @@ class AnthropicClient(LLMClient):
             self._rate_limit_error = anthropic.RateLimitError
         except ImportError as exc:
             raise LLMError(
-                "anthropic no instalado. pip install anthropic"
+                "anthropic not installed. pip install anthropic"
             ) from exc
 
         self._last_call_ts: float = 0.0
         self._min_call_interval: float = 0.5
 
-        # Tracking de gasto diario
+        # Daily spend tracking
         self._daily_spend_usd: float = 0.0
         self._spend_day_utc: str = self._today_str()
 
@@ -288,7 +288,7 @@ class AnthropicClient(LLMClient):
         )
         if self.cfg.model not in ANTHROPIC_PRICING_USD_PER_MTOK:
             self._log.warning(
-                "Modelo {} sin pricing conocido; uso $3/$15 por defecto",
+                "Model {} has no known pricing; using $3/$15 as default",
                 self.cfg.model,
             )
 
@@ -298,7 +298,7 @@ class AnthropicClient(LLMClient):
         user_prompt: str,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-        force_json: bool = False,  # ignorado en Anthropic (no tiene flag nativo)
+        force_json: bool = False,  # ignored in Anthropic (no native flag)
     ) -> dict[str, Any]:
         max_tokens = max_tokens or self.cfg.max_tokens
         temperature = temperature if temperature is not None else self.cfg.temperature
@@ -310,13 +310,13 @@ class AnthropicClient(LLMClient):
             and self._daily_spend_usd >= self.cfg.daily_spend_limit_usd
         ):
             raise DailyBudgetExceeded(
-                f"Gasto diario ${self._daily_spend_usd:.4f} ha alcanzado el "
-                f"límite ${self.cfg.daily_spend_limit_usd:.2f} (UTC day "
-                f"{self._spend_day_utc}). Reset a las 00:00 UTC."
+                f"Daily spend ${self._daily_spend_usd:.4f} has reached the "
+                f"limit ${self.cfg.daily_spend_limit_usd:.2f} (UTC day "
+                f"{self._spend_day_utc}). Resets at 00:00 UTC."
             )
 
         if self.cfg.dry_run:
-            self._log.warning("DRY_RUN activo. No se llama al LLM.")
+            self._log.warning("DRY_RUN active. LLM will not be called.")
             return {
                 "text": "{}",
                 "input_tokens": 0,
@@ -338,7 +338,7 @@ class AnthropicClient(LLMClient):
             self._handle_rate_limit_error(exc)
             raise
         except Exception as exc:
-            self._log.error("Anthropic falló: {}", exc)
+            self._log.error("Anthropic failed: {}", exc)
             raise LLMError(str(exc)) from exc
 
         text_parts: list[str] = []
@@ -415,7 +415,7 @@ class AnthropicClient(LLMClient):
         today = self._today_str()
         if today != self._spend_day_utc:
             self._log.info(
-                "Reset diario del contador de gasto. Día anterior: ${:.4f}",
+                "Daily spend counter reset. Previous day: ${:.4f}",
                 self._daily_spend_usd,
             )
             self._daily_spend_usd = 0.0
@@ -464,33 +464,33 @@ class AnthropicClient(LLMClient):
 
         wait_msg = ""
         if retry_after:
-            wait_msg = f" Reintentar en {retry_after}s."
+            wait_msg = f" Retry in {retry_after}s."
         elif reset_at:
-            wait_msg = f" Reset estimado: {reset_at.isoformat()}."
+            wait_msg = f" Estimated reset: {reset_at.isoformat()}."
 
         if is_credits:
             self._log.error(
-                "CRÉDITOS AGOTADOS en console.anthropic.com.{} "
-                "Recarga en https://console.anthropic.com/billing",
+                "CREDITS EXHAUSTED at console.anthropic.com.{} "
+                "Top up at https://console.anthropic.com/billing",
                 wait_msg,
             )
             raise CreditsExhausted(
-                f"Cuenta sin créditos.{wait_msg}",
+                f"Account has no credits.{wait_msg}",
                 reset_at=reset_at,
                 retry_after_seconds=retry_after,
             ) from exc
 
-        self._log.warning("Rate limit alcanzado.{}", wait_msg)
+        self._log.warning("Rate limit reached.{}", wait_msg)
         raise LLMError(f"Rate limit (HTTP 429).{wait_msg}") from exc
 
 
 # =====================================================
-# Implementación Ollama
+# Ollama implementation
 # =====================================================
 
 
 class OllamaClient(LLMClient):
-    """Cliente para Ollama local. Gratis, sin coste, sin red externa."""
+    """Client for local Ollama. Free, no cost, no external network."""
 
     def __init__(self, config: BotConfig) -> None:
         super().__init__(config)
@@ -507,24 +507,24 @@ class OllamaClient(LLMClient):
         return self._local.session
 
     def verify_setup(self) -> None:
-        """Verifica que Ollama corre y el modelo está descargado.
+        """Verifies that Ollama is running and the model is downloaded.
 
-        Llamar al inicio del bot para fallar pronto si algo no está listo.
+        Call at bot startup to fail fast if something is not ready.
         """
         try:
             r = self._session.get(f"{self.base_url}/api/tags", timeout=5)
             r.raise_for_status()
         except requests.RequestException as exc:
             raise OllamaUnavailable(
-                f"Ollama no responde en {self.base_url}. "
-                f"Asegúrate de que el servicio está corriendo: 'ollama serve'. "
-                f"Detalle: {exc}"
+                f"Ollama not responding at {self.base_url}. "
+                f"Make sure the service is running: 'ollama serve'. "
+                f"Detail: {exc}"
             ) from exc
 
         data = r.json()
         installed_models = [m["name"] for m in data.get("models", [])]
-        # Aceptamos coincidencia exacta o que el config sea prefijo (ollama
-        # añade ":latest" si no especificas tag)
+        # Accept exact match or config being a prefix (ollama
+        # appends ":latest" if no tag is specified)
         target = self.cfg.model
         installed_ok = any(
             m == target or m.startswith(f"{target}:") or m.split(":")[0] == target.split(":")[0]
@@ -532,11 +532,11 @@ class OllamaClient(LLMClient):
         )
         if not installed_ok:
             raise OllamaUnavailable(
-                f"El modelo '{target}' no está descargado. "
-                f"Modelos disponibles: {installed_models}. "
-                f"Descárgalo con: ollama pull {target}"
+                f"Model '{target}' is not downloaded. "
+                f"Available models: {installed_models}. "
+                f"Download it with: ollama pull {target}"
             )
-        self._log.info("Ollama OK | modelo='{}' | servidor='{}'", target, self.base_url)
+        self._log.info("Ollama OK | model='{}' | server='{}'", target, self.base_url)
 
     def complete(
         self,
@@ -550,7 +550,7 @@ class OllamaClient(LLMClient):
         temperature = temperature if temperature is not None else self.cfg.temperature
 
         if self.cfg.dry_run:
-            self._log.warning("DRY_RUN activo. No se llama a Ollama.")
+            self._log.warning("DRY_RUN active. Ollama will not be called.")
             return {
                 "text": "{}",
                 "input_tokens": 0,
@@ -559,7 +559,7 @@ class OllamaClient(LLMClient):
                 "estimated_cost_usd": 0.0,
             }
 
-        # Ollama usa /api/chat con formato OpenAI-like
+        # Ollama uses /api/chat with OpenAI-like format
         payload: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": [
@@ -572,9 +572,9 @@ class OllamaClient(LLMClient):
                 "num_predict": max_tokens,
             },
         }
-        # Forzar JSON si el modelo lo soporta. Ollama acepta format="json" en
-        # los modelos compatibles (qwen, llama, mistral, etc.). Si el modelo no
-        # lo soporta, lo ignora.
+        # Force JSON if the model supports it. Ollama accepts format="json" on
+        # compatible models (qwen, llama, mistral, etc.). If the model does not
+        # support it, it is ignored.
         if force_json:
             payload["format"] = "json"
 
@@ -583,18 +583,18 @@ class OllamaClient(LLMClient):
         except requests.Timeout as exc:
             # Timeout is expected on slow hardware — handled upstream, not an error.
             self._log.warning(
-                "Ollama timeout ({}s) — mercado omitido, análisis no disponible",
+                "Ollama timeout ({}s) — market skipped, analysis unavailable",
                 self.timeout,
             )
             raise LLMError(f"Ollama timeout after {self.timeout}s") from exc
         except requests.RequestException as exc:
-            self._log.error("Ollama falló (error de red): {}", exc)
+            self._log.error("Ollama failed (network error): {}", exc)
             raise LLMError(f"Ollama HTTP error: {exc}") from exc
 
         try:
             data = response.json()
         except ValueError as exc:
-            raise LLMError(f"Ollama devolvió JSON inválido: {exc}") from exc
+            raise LLMError(f"Ollama returned invalid JSON: {exc}") from exc
 
         text = data.get("message", {}).get("content", "")
         in_tokens = data.get("prompt_eval_count", 0)
@@ -610,7 +610,7 @@ class OllamaClient(LLMClient):
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
             "stop_reason": data.get("done_reason", "stop"),
-            "estimated_cost_usd": 0.0,  # gratis
+            "estimated_cost_usd": 0.0,  # free
         }
 
     # ---------- Ollama internals ----------
@@ -636,7 +636,7 @@ class OllamaClient(LLMClient):
 
     @property
     def daily_spend_usd(self) -> float:
-        return 0.0  # Ollama es gratis
+        return 0.0  # Ollama is free
 
     @property
     def daily_budget_remaining_usd(self) -> float:
@@ -649,13 +649,13 @@ class OllamaClient(LLMClient):
 
 
 def build_llm_client(config: BotConfig) -> LLMClient:
-    """Construye el cliente correcto según `config.llm.provider`."""
+    """Builds the correct client based on `config.llm.provider`."""
     provider = config.llm.provider.lower().strip()
     if provider == "anthropic":
         return AnthropicClient(config)
     if provider == "ollama":
         return OllamaClient(config)
     raise LLMError(
-        f"Provider LLM desconocido: '{provider}'. "
-        f"Opciones válidas: 'anthropic', 'ollama'."
+        f"Unknown LLM provider: '{provider}'. "
+        f"Valid options: 'anthropic', 'ollama'."
     )

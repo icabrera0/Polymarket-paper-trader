@@ -1,12 +1,12 @@
 # =====================================================
-# Polymarket Paper Trading Bot - Configuración
+# Polymarket Paper Trading Bot - Configuration
 # =====================================================
-# Toda la configuración tuneable del bot.
-# Las claves de API y secretos van en .env, NO aquí.
+# All tuneable configuration for the bot.
+# API keys and secrets go in .env, NOT here.
 # =====================================================
 
 # ---------------------------------------------------
-# Aplicación
+# Application
 # ---------------------------------------------------
 app:
   name: "Polymarket Paper Trading Bot"
@@ -15,24 +15,24 @@ app:
   base_currency: "EUR"
 
 # ---------------------------------------------------
-# Paper trading: balance virtual
+# Paper trading: virtual balance
 # ---------------------------------------------------
 paper_trading:
   initial_balance_eur: 150.0
-  # Conversión EUR→USD que usa el bot (Polymarket opera en USDC).
-  # En producción, se actualizará con tipo de cambio real.
+  # EUR→USD conversion rate used by the bot (Polymarket operates in USDC).
+  # In production, this will be updated with the real exchange rate.
   eur_to_usd_rate: 1.07
 
 # ---------------------------------------------------
-# Risk management (CRÍTICO - calibrado para 150€)
+# Risk management (CRITICAL - calibrated for €150)
 # ---------------------------------------------------
 risk:
-  max_position_size_pct: 0.15          # 15% del balance por trade (~22€)
+  max_position_size_pct: 0.15          # 15% of balance per trade (~€22)
   max_simultaneous_positions: 3
-  min_trade_size_eur: 5.0              # Por debajo, descartar
+  min_trade_size_eur: 5.0              # Below this, discard
   max_drawdown_pct: 0.30               # 30% loss from INITIAL balance → alert
-  stop_loss_pct: 0.20                  # -20% del valor de entrada
-  take_profit_pct: 0.30                # +30% para considerar cierre
+  stop_loss_pct: 0.20                  # -20% of entry value
+  take_profit_pct: 0.30                # +30% to consider closing
   # false → bot never pauses, drawdown is monitoring-only (good for disposable bankroll)
   # true  → bot freezes when drawdown threshold is hit, requires manual resume
   pause_on_drawdown: false
@@ -47,217 +47,218 @@ risk:
   time_exit_hard_hours: 72
 
 # ---------------------------------------------------
-# Filtros de mercado (qué mercados son operables)
+# Market filters (which markets are tradeable)
 # ---------------------------------------------------
 market_filters:
-  min_volume_24h_usd: 10000            # Liquidez mínima
-  max_spread_cents: 0.05               # Spread máximo bid/ask
-  min_probability_edge: 0.10           # Diferencia precio vs probabilidad inferida
-  min_time_to_close_hours: 2           # Mercados que cierran en <2h se descartan
-  max_time_to_close_days: 30           # Mercados muy a futuro tienen demasiada incertidumbre
+  min_volume_24h_usd: 10000            # Minimum liquidity
+  max_spread_cents: 0.05               # Maximum bid/ask spread
+  min_probability_edge: 0.10           # Difference between price and inferred probability
+  min_time_to_close_hours: 2           # Markets closing in <2h are discarded
+  max_time_to_close_days: 30           # Far-future markets carry too much uncertainty
   exclude_categories: ["Sports", "Esports"]  # Match markets: in-play gap risk kills SL
 
 # ---------------------------------------------------
-# Fuentes de noticias
-# Las 3 son independientemente toggleables. Activa al menos una.
+# News sources
+# All 3 are independently toggleable. Enable at least one.
 # ---------------------------------------------------
 news:
   newsapi:
-    enabled: false                     # true requiere NEWSAPI_KEY (newsapi.org/register)
-    poll_interval_seconds: 300         # Cada 5 minutos
+    enabled: false                     # true requires NEWSAPI_KEY (newsapi.org/register)
+    poll_interval_seconds: 300         # Every 5 minutes
     languages: ["en", "es"]
     page_size: 50
-    sources:                           # Fuentes priorizadas
+    sources:                           # Prioritized sources
       - "reuters"
       - "associated-press"
       - "bloomberg"
       - "bbc-news"
       - "cnn"
   gdelt:
-    enabled: true                      # No requiere credenciales
-    poll_interval_seconds: 900         # Cada 15 minutos
-    timespan: "24h"                    # GDELT rechaza <1h. 24h da buen contexto.
+    enabled: true                      # No credentials required
+    poll_interval_seconds: 900         # Every 15 minutes
+    timespan: "24h"                    # GDELT rejects <1h. 24h gives good context.
     max_records: 100
   telegram:
-    enabled: true                     # true requiere credenciales en .env
-    poll_interval_seconds: 60          # Telegram refresca rápido
-    message_lookback_minutes: 1440     # 24h por defecto (alineado con GDELT)
+    enabled: true                     # true requires credentials in .env
+    poll_interval_seconds: 60          # Telegram refreshes fast
+    message_lookback_minutes: 1440     # 24h by default (aligned with GDELT)
     messages_per_channel: 50
-    # Canales públicos pre-configurados. Ajusta a tu gusto.
-    # Mezcla: agencias internacionales, geopolítica, crypto, finanzas.
-    # IMPORTANTE: ninguno es oficial al 100%; algunos son rebroadcasts no
-    # afiliados. Verifica cada uno antes de tomarte sus mensajes como verdad.
+    # Pre-configured public channels. Adjust to your preference.
+    # Mix: international agencies, geopolitics, crypto, finance.
+    # IMPORTANT: none are 100% official; some are unofficial rebroadcasts
+    # not affiliated with the source. Verify each before treating their
+    # messages as ground truth.
     channels:
-      # --- Agencias y prensa internacional ---
-      - "@ReutersWorldChannel"        # Reuters world (rebroadcast no oficial)
+      # --- International agencies and press ---
+      - "@ReutersWorldChannel"        # Reuters world (unofficial rebroadcast)
       - "@bbcbreaking"                # BBC Breaking News
       - "@disclosetv"                 # Global events, fast posting
-      # --- Geopolítica / conflictos ---
-      - "@intelslava"                 # Conflict aggregator (Ucrania, MENA)
-      - "@war_monitor"                # Crisis flashpoints globales
+      # --- Geopolitics / conflicts ---
+      - "@intelslava"                 # Conflict aggregator (Ukraine, MENA)
+      - "@war_monitor"                # Global crisis flashpoints
       - "@geopoliticsworld"           # Daily geopolitical summaries
-      - "@WW3INFO"                    # War alerts (sesgado, validar)
-      # --- Crypto / mercados ---
-      - "@whale_alert_io"             # Movimientos on-chain de whales
+      - "@WW3INFO"                    # War alerts (biased, verify)
+      # --- Crypto / markets ---
+      - "@whale_alert_io"             # On-chain whale movements
       - "@CoinDesk"                   # Breaking crypto news (CoinDesk)
-      - "@cointelegraph"              # Crypto news y análisis
-      - "@binance_announcements"      # Listings y anuncios oficiales Binance
-      # --- Mapas y seguimiento de línea de frente ---
-      - "@UAControlMap"               # Ukraine Control Map – geolocations y frontline
-      - "@DeepStateUA"                # DeepState UA – análisis frontline (ucraniano)
-      - "@DeepStateEN"                # DeepState EN – análisis frontline (inglés)
-      - "@liveuamap"                  # Liveuamap – mapa en tiempo real
-      - "@militarylandnet"            # MilitaryLand.net – mapas y análisis
-      # --- OSINT / análisis militar ---
-      - "@tatarigami_UA"              # Tatarigami UA – análisis militar ucraniano
-      - "@NOELreports"                # NOEL Reports – reportes OSINT frontline
-      - "@DefMon3war"                 # DefMon3 – seguimiento unidades y frontline
-      - "@thedeaddistrict"            # The Dead District – análisis militar
-      - "@ELINTNews"                  # ELINT News – inteligencia de señales
-      - "@Osinttechnical"             # OSINTtechnical – análisis técnico militar
-      - "@wartranslated"              # WarTranslated – traducciones fuentes rusas
-      - "@emilkastehelmi"             # Emil Kastehelmi – análisis OSINT
-      - "@Tendar"                     # Tendar – seguimiento frontline
-      # --- Medios / periodismo ---
-      - "@kyivindependent"            # The Kyiv Independent – prensa ucraniana
-      - "@IAPonomarenko"              # Illia Ponomarenko – corresponsal defensa
-      - "@christogrozev"              # Christo Grozev – investigaciones Bellingcat
-      # --- Think tanks / análisis estratégico ---
+      - "@cointelegraph"              # Crypto news and analysis
+      - "@binance_announcements"      # Official Binance listings and announcements
+      # --- Maps and frontline tracking ---
+      - "@UAControlMap"               # Ukraine Control Map – geolocations and frontline
+      - "@DeepStateUA"                # DeepState UA – frontline analysis (Ukrainian)
+      - "@DeepStateEN"                # DeepState EN – frontline analysis (English)
+      - "@liveuamap"                  # Liveuamap – real-time map
+      - "@militarylandnet"            # MilitaryLand.net – maps and analysis
+      # --- OSINT / military analysis ---
+      - "@tatarigami_UA"              # Tatarigami UA – Ukrainian military analysis
+      - "@NOELreports"                # NOEL Reports – frontline OSINT reports
+      - "@DefMon3war"                 # DefMon3 – unit and frontline tracking
+      - "@thedeaddistrict"            # The Dead District – military analysis
+      - "@ELINTNews"                  # ELINT News – signals intelligence
+      - "@Osinttechnical"             # OSINTtechnical – military technical analysis
+      - "@wartranslated"              # WarTranslated – translations of Russian sources
+      - "@emilkastehelmi"             # Emil Kastehelmi – OSINT analysis
+      - "@Tendar"                     # Tendar – frontline tracking
+      # --- Media / journalism ---
+      - "@kyivindependent"            # The Kyiv Independent – Ukrainian press
+      - "@IAPonomarenko"              # Illia Ponomarenko – defence correspondent
+      - "@christogrozev"              # Christo Grozev – Bellingcat investigations
+      # --- Think tanks / strategic analysis ---
       - "@TheStudyofWar"              # Institute for the Study of War (ISW)
-      # --- Fuentes rusas (validar sesgo) ---
-      - "@GirkinGirkin"               # Igor Girkin – militar ruso (sesgado, validar)
-      # --- Campo / Ucrania ---
-      - "@bayraktar_1love"            # Special Kherson Cat – reportes de campo
+      # --- Russian sources (verify bias) ---
+      - "@GirkinGirkin"               # Igor Girkin – Russian military figure (biased, verify)
+      # --- Field / Ukraine ---
+      - "@bayraktar_1love"            # Special Kherson Cat – field reports
       # ---------------------------------------------------------------
-      # DEPORTES — noticias en directo e injuries (añadidos para sports_in_play)
+      # SPORTS — live news and injuries (added for sports_in_play)
       # ---------------------------------------------------------------
-      # --- Noticias deportivas generales ---
-      - "@FabrizioRomano"             # Romano – transfers y lesiones fútbol (muy fiable)
-      - "@BleacherReport"             # Bleacher Report – noticias multideporte
-      - "@footballtalkk"              # Football Talk – noticias fútbol
+      # --- General sports news ---
+      - "@FabrizioRomano"             # Romano – football transfers and injuries (very reliable)
+      - "@BleacherReport"             # Bleacher Report – multi-sport news
+      - "@footballtalkk"              # Football Talk – football news
       # --- Cricket ---
-      - "@CricketBuzzOfficial"        # Cricket Buzz – noticias y scores IPL/T20
-      - "@CricketUpdatesLive"         # Live cricket scores y actualizaciones
+      - "@CricketBuzzOfficial"        # Cricket Buzz – IPL/T20 news and scores
+      - "@CricketUpdatesLive"         # Live cricket scores and updates
       # ---------------------------------------------------------------
-      # PREDICCIONES DEPORTIVAS — tipsters y análisis (validar sesgo)
-      # Estos canales publican picks y análisis que el LLM puede usar como
-      # señal de consenso. No son 100% precisos; se cruzan con otras fuentes.
+      # SPORTS PREDICTIONS — tipsters and analysis (verify bias)
+      # These channels publish picks and analysis that the LLM can use as
+      # consensus signals. They are not 100% accurate; cross-check with other sources.
       # ---------------------------------------------------------------
-      - "@BettingTipsChannel"         # Canal de tips con razonamiento
-      - "@PredictionsFootball"        # Análisis de partidos de fútbol
-      - "@CricketPredictions"         # Tips cricket IPL/Test/T20
-      - "@TennisPredictions"          # Predicciones ATP/WTA con odds
-  cache_ttl_seconds: 3600              # 1 hora
-  dedup_similarity_threshold: 0.85     # Fuzzy match para detectar duplicados
+      - "@BettingTipsChannel"         # Tips channel with reasoning
+      - "@PredictionsFootball"        # Football match analysis
+      - "@CricketPredictions"         # Cricket tips IPL/Test/T20
+      - "@TennisPredictions"          # ATP/WTA predictions with odds
+  cache_ttl_seconds: 3600              # 1 hour
+  dedup_similarity_threshold: 0.85     # Fuzzy match to detect duplicates
 
 # ---------------------------------------------------
-# LLM (proveedor del análisis de sentimiento)
+# LLM (sentiment analysis provider)
 #
-# Dos opciones soportadas:
+# Two supported options:
 #
-#   provider: "ollama"     → LOCAL, gratis, sin red externa.
-#                            Requiere Ollama instalado y modelo descargado.
-#                            Recomendado para uso continuo.
+#   provider: "ollama"     → LOCAL, free, no external network.
+#                            Requires Ollama installed and model downloaded.
+#                            Recommended for continuous use.
 #
-#   provider: "anthropic"  → Claude API. Mejor calidad pero CUESTA DINERO
-#                            (créditos en console.anthropic.com, NO Pro/Max).
-#                            Útil si necesitas calibración de probabilidades
-#                            muy precisa o si Ollama no rinde en tu PC.
+#   provider: "anthropic"  → Claude API. Better quality but COSTS MONEY
+#                            (credits at console.anthropic.com, NOT Pro/Max).
+#                            Useful if you need very precise probability
+#                            calibration or if Ollama doesn't perform well on your PC.
 #
-# Para esta config (Ollama + qwen2.5 7B):
-#   1. Instalar Ollama: https://ollama.com/download
+# For this config (Ollama + qwen2.5 7B):
+#   1. Install Ollama: https://ollama.com/download
 #   2. ollama pull qwen2.5:7b-instruct-q4_K_M
-#   3. ollama serve  (suele correr ya como servicio en background)
+#   3. ollama serve  (usually already running as a background service)
 # ---------------------------------------------------
 llm:
   provider: "ollama"
 
-  # Modelo. Para Ollama: qwen2.5:7b-instruct-q4_K_M (recomendado para 8GB VRAM)
-  # Para Anthropic: claude-haiku-4-5 (más barato) o claude-sonnet-4-6
+  # Model. For Ollama: qwen2.5:7b-instruct-q4_K_M (recommended for 8GB VRAM)
+  # For Anthropic: claude-haiku-4-5 (cheaper) or claude-sonnet-4-6
   model: "qwen2.5:7b-instruct-q4_K_M"
 
   max_tokens: 2048
-  temperature: 0.2                     # Bajo para análisis consistente
+  temperature: 0.2                     # Low for consistent analysis
   retry_attempts: 3
   retry_delay_seconds: 5
-  min_confidence_threshold: 60         # % mínimo de confianza del LLM para considerar la decisión
+  min_confidence_threshold: 60         # Minimum LLM confidence % to consider the decision
   cache_analysis: true
-  cache_ttl_seconds: 1800              # Re-analizar mercados cada 30 min máx
+  cache_ttl_seconds: 1800              # Re-analyze markets at most every 30 min
 
-  # ----- Solo Anthropic -----
-  # Tope diario en USD. Si las llamadas acumuladas hoy superan este límite,
-  # el SENTIMENT_ANALYZER deja de llamar al LLM hasta el reset (00:00 UTC).
+  # ----- Anthropic only -----
+  # Daily cap in USD. If accumulated calls today exceed this limit,
+  # SENTIMENT_ANALYZER stops calling the LLM until the reset (00:00 UTC).
   daily_spend_limit_usd: 5.0
 
-  # Modo "dry run": no llama al LLM, solo loguea. Útil para estimar coste.
+  # "Dry run" mode: does not call the LLM, only logs. Useful for estimating cost.
   dry_run: false
 
-  # ----- Solo Ollama -----
+  # ----- Ollama only -----
   ollama_base_url: "http://localhost:11434"
-  ollama_timeout_seconds: 180          # Modelos locales pueden ser lentos; sin retry en timeout
+  ollama_timeout_seconds: 180          # Local models can be slow; no retry on timeout
   # Parallel workers for LLM analysis (dashboard slider overrides this at runtime).
   # >1 requires: set OLLAMA_NUM_PARALLEL=<N> env var before starting Ollama.
   llm_parallelism: 1
 
 # ---------------------------------------------------
-# Polymarket (endpoints y polling)
+# Polymarket (endpoints and polling)
 # ---------------------------------------------------
 polymarket:
   gamma_api_url: "https://gamma-api.polymarket.com"
   clob_api_url: "https://clob.polymarket.com"
-  scan_interval_seconds: 300           # Escaneo de mercados cada 5 min
+  scan_interval_seconds: 300           # Market scan every 5 min
   request_timeout_seconds: 30
-  # Comisiones — actualmente Polymarket cobra 0% pero parametrizado por si cambia
+  # Fees — Polymarket currently charges 0% but parameterised in case it changes
   trading_fee_pct: 0.0
-  # Slippage simulado en paper trading (% sobre precio de entrada)
+  # Simulated slippage in paper trading (% of entry price)
   simulated_slippage_pct: 0.005        # 0.5%
 
 # ---------------------------------------------------
 # Decision engine
 # ---------------------------------------------------
 decision:
-  llm_consultation_threshold: 0.08     # Edge > 8% → consultar LLM
-  require_news_for_entry: true         # No abrir sin noticia que respalde
+  llm_consultation_threshold: 0.08     # Edge > 8% → consult LLM
+  require_news_for_entry: true         # Do not open without a supporting news item
   reevaluate_open_positions_minutes: 15
 
   # =====================================================
-  # COBERTURA DE MERCADOS (analisis-coverage)
+  # MARKET COVERAGE (analysis-coverage)
   # =====================================================
-  # Cuántos mercados se intentan analizar por ciclo (más → más oportunidades
-  # pero también más coste en tokens si usas Anthropic).
+  # How many markets to attempt to analyze per cycle (more → more opportunities
+  # but also more token cost if using Anthropic).
   markets_to_analyze_per_cycle: 15
 
-  # Re-ranking por categoría: las categorías con cobertura mediática alta
-  # se priorizan sobre esports / deportes nicho. Los mercados sin categoría
-  # mantienen su posición.
+  # Re-ranking by category: categories with high media coverage
+  # are prioritized over esports / niche sports. Markets with no category
+  # keep their position.
   category_priority_boost:
     Politics: 1.5
     Geopolitics: 1.5
     Crypto: 1.4
     Tech: 1.3
     Business: 1.3
-    Sports: 0.8                        # Cobertura baja en mercados regionales
-    Esports: 0.4                       # Casi inexistente en GDELT
+    Sports: 0.8                        # Low coverage in regional markets
+    Esports: 0.4                       # Almost nonexistent in GDELT
 
   # =====================================================
-  # FALLBACK: ampliar búsqueda cuando no hay noticias frescas
+  # FALLBACK: broaden search when there is no fresh news
   # =====================================================
-  # Si la búsqueda de 24h no devuelve noticias, reintentar con timespan
-  # ampliado para tener al menos contexto.
+  # If the 24h search returns no news, retry with an extended timespan
+  # to have at least some context.
   fallback_news_lookback: "7d"
   enable_fallback_search: true
 
   # =====================================================
-  # LOW-INFO TRADES (modo cauteloso)
+  # LOW-INFO TRADES (cautious mode)
   # =====================================================
-  # Permitir trades con <2 noticias relevantes. Si se permite:
-  # - Sizing reducido por low_info_size_multiplier
-  # - Confianza mínima ELEVADA (más exigente con el LLM)
-  # Mantiene la disciplina de riesgo pero abre cobertura.
+  # Allow trades with <2 relevant news items. If allowed:
+  # - Sizing reduced by low_info_size_multiplier
+  # - Minimum confidence RAISED (stricter LLM requirement)
+  # Maintains risk discipline while expanding coverage.
   allow_low_info_trades: true
   low_info_min_confidence: 75          # vs 60 normal
-  low_info_size_multiplier: 0.5        # 50% del sizing dinámico habitual
-  low_info_min_articles: 1             # Acepta análisis con 1+ noticia
+  low_info_size_multiplier: 0.5        # 50% of the usual dynamic sizing
+  low_info_min_articles: 1             # Accepts analysis with 1+ news item
 
   # =====================================================
   # NO-OPPORTUNITY HUNT
@@ -271,35 +272,35 @@ decision:
   no_hunt_max_candidates: 3            # Extra markets per cycle (on top of main scan)
 
 # ---------------------------------------------------
-# Sports In-Play (módulo secundario, opt-in)
+# Sports In-Play (secondary module, opt-in)
 # ---------------------------------------------------
-# Mercados de partidos en directo: apuestas asimétricas al underdog (solo BUY_NO).
-# Tamaño fijo y pequeño — tratar como tickets de lotería especulativa.
-# Requiere enabled: true para activar. Completamente separado del flujo principal.
+# Live match markets: asymmetric bets on the underdog (BUY_NO only).
+# Fixed small size — treat as speculative lottery tickets.
+# Requires enabled: true to activate. Completely separate from the main flow.
 # ---------------------------------------------------
 sports_in_play:
-  enabled: true                         # Cambiar a true para activar
-  max_positions: 1                       # Solo 1 posición deportiva simultánea
-  position_size_eur: 3.0                 # Tamaño fijo. Nunca dinámico.
-  min_yes_price: 0.68                    # Solo entrar si el favorito está al ≥68%
-  max_yes_price: 0.88                    # Por encima del 88% el underdog es demasiado extremo
-  max_time_to_close_hours: 4.0           # Solo partidos en curso o con <4h
-  min_volume_24h_usd: 5000               # Liquidez mínima para deportes
-  min_fresh_news_minutes: 60             # Exige noticia <60min sobre el partido
-  min_confidence: 65                     # Umbral mínimo del LLM (hard ceiling del prompt)
-  stop_loss_pct: 0.50                    # SL al -50% (más amplio para absorber swings)
-  take_profit_pct: 0.80                  # TP al +80% (salir antes de que cierre el mercado)
-  scan_categories: ["Sports", "Esports"] # Categorías a escanear
+  enabled: true                         # Change to true to activate
+  max_positions: 1                       # Only 1 simultaneous sports position
+  position_size_eur: 3.0                 # Fixed size. Never dynamic.
+  min_yes_price: 0.68                    # Only enter if the favourite is at ≥68%
+  max_yes_price: 0.88                    # Above 88% the underdog is too extreme
+  max_time_to_close_hours: 4.0           # Only in-progress matches or with <4h remaining
+  min_volume_24h_usd: 5000               # Minimum liquidity for sports
+  min_fresh_news_minutes: 60             # Requires news <60min about the match
+  min_confidence: 65                     # Minimum LLM threshold (hard ceiling of the prompt)
+  stop_loss_pct: 0.50                    # SL at -50% (wider to absorb swings)
+  take_profit_pct: 0.80                  # TP at +80% (exit before market closes)
+  scan_categories: ["Sports", "Esports"] # Categories to scan
 
 # ---------------------------------------------------
-# Reportes Excel
+# Excel reports
 # ---------------------------------------------------
 reports:
   output_directory: "reports"
   filename_format: "%Y-%m-%d_report.xlsx"
-  generation_time: "23:55"             # Hora local (Europe/Madrid)
+  generation_time: "23:55"             # Local time (Europe/Madrid)
   include_charts: true
-  conditional_formatting: true         # Verde P&L+, rojo P&L-
+  conditional_formatting: true         # Green P&L+, red P&L-
 
 # ---------------------------------------------------
 # Logging
@@ -309,25 +310,25 @@ logging:
   log_directory: "logs"
   rotation_size_mb: 50
   retention_days: 30
-  log_llm_decisions: true              # Cada decisión del LLM se loguea íntegra
+  log_llm_decisions: true              # Each LLM decision is logged in full
   log_format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}"
 
 # ---------------------------------------------------
-# Base de datos (SQLite)
+# Database (SQLite)
 # ---------------------------------------------------
 database:
   type: "sqlite"
   path: "data/polymarket_bot.db"
-  # Tablas que se crearán: trades, news_events, market_snapshots, llm_decisions, balance_history
+  # Tables to be created: trades, news_events, market_snapshots, llm_decisions, balance_history
 
 # ---------------------------------------------------
-# Notificaciones Discord
+# Discord notifications
 # ---------------------------------------------------
 notifications:
   discord:
     enabled: true
     username: "PolymarketBot"
-    avatar_url: ""                     # URL opcional de avatar
+    avatar_url: ""                     # Optional avatar URL
     notify_on_trade_open: true
     notify_on_trade_close: true
     notify_on_stop_loss: true
@@ -336,8 +337,8 @@ notifications:
     notify_on_bot_pause: true
     notify_daily_summary: true
     daily_summary_time: "23:59"
-    # Colores embeds (decimal)
-    color_profit: 3066993              # Verde
-    color_loss: 15158332               # Rojo
-    color_info: 3447003                # Azul
-    color_warning: 16776960            # Amarillo
+    # Embed colors (decimal)
+    color_profit: 3066993              # Green
+    color_loss: 15158332               # Red
+    color_info: 3447003                # Blue
+    color_warning: 16776960            # Yellow

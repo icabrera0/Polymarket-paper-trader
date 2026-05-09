@@ -1,26 +1,26 @@
 """
-News Ingestor — orquesta las fuentes de noticias, deduplica y prioriza.
+News Ingestor — orchestrates news sources, deduplicates, and prioritizes.
 
-Flujo:
-1. Recibe una lista de keywords (típicamente extraídos de mercados activos).
-2. Pide artículos a NewsAPI y/o GDELT en paralelo (si están habilitados).
-3. Calcula un score heurístico de impacto a cada artículo (0-100).
-4. Deduplica:
-   a) por URL exacta (mismo artículo recogido por dos fuentes)
-   b) por similitud difusa de títulos (rapidfuzz, umbral configurable)
-5. Devuelve la lista ordenada por score descendente.
+Flow:
+1. Receives a list of keywords (typically extracted from active markets).
+2. Requests articles from NewsAPI and/or GDELT in parallel (if enabled).
+3. Computes a heuristic impact score for each article (0-100).
+4. Deduplicates:
+   a) by exact URL (same article collected by two sources)
+   b) by fuzzy title similarity (rapidfuzz, configurable threshold)
+5. Returns the list sorted by score descending.
 
-El score que devuelve es una HEURÍSTICA. El módulo SENTIMENT_ANALYZER
-recalculará un score real con el LLM. Esta heurística sirve para:
-- Decidir el orden en que se procesan las noticias por el LLM (limitado por
-  rate limits y coste).
-- Filtrar ruido obvio antes de gastar tokens del LLM.
+The score returned is a HEURISTIC. The SENTIMENT_ANALYZER module
+will recalculate a real score using the LLM. This heuristic serves to:
+- Decide the order in which news items are processed by the LLM (limited by
+  rate limits and cost).
+- Filter obvious noise before spending LLM tokens.
 
-Componentes del score:
-  Recencia            (max 30) — decae linealmente sobre 24h
-  Reputación fuente   (max 30) — Reuters/AP/Bloomberg etc. > otros
-  Match de keywords   (max 30) — 10 pts por keyword distinto, hasta 3
-  Urgencia del título (max 10) — BREAKING, URGENT, JUST IN, etc.
+Score components:
+  Recency            (max 30) — decays linearly over 24h
+  Source reputation  (max 30) — Reuters/AP/Bloomberg etc. > others
+  Keyword match      (max 30) — 10 pts per distinct keyword, up to 3
+  Title urgency      (max 10) — BREAKING, URGENT, JUST IN, etc.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from src.config_loader import BotConfig
 from src.models import NewsArticle
 
 
-# Fuentes que consideramos de alta reputación por defecto. Se complementa con
-# las definidas en config.news.newsapi.sources.
+# Sources considered high-reputation by default. Complemented by those
+# defined in config.news.newsapi.sources.
 DEFAULT_HIGH_REPUTATION_SOURCES: tuple[str, ...] = (
     "reuters", "associated press", "ap news", "bloomberg",
     "bbc", "cnn", "wall street journal", "wsj",
@@ -52,12 +52,12 @@ URGENCY_MARKERS: tuple[str, ...] = (
 
 
 # =====================================================
-# Protocolo de cliente (para inyección de dependencias)
+# Client protocol (for dependency injection)
 # =====================================================
 
 
 class NewsClientProtocol(Protocol):
-    """Protocolo común que cumplen NewsApiClient y GdeltClient."""
+    """Common protocol implemented by NewsApiClient and GdeltClient."""
 
     def fetch_articles(
         self, keywords: list[str], **kwargs: Any
@@ -70,7 +70,7 @@ class NewsClientProtocol(Protocol):
 
 
 class NewsIngestor:
-    """Orquesta las fuentes de noticias y devuelve un stream priorizado."""
+    """Orchestrates news sources and returns a prioritized stream."""
 
     def __init__(
         self,
@@ -84,8 +84,8 @@ class NewsIngestor:
         self.cache_ttl = cache_ttl_seconds or config.news.cache_ttl_seconds
         self.dedup_threshold = config.news.dedup_similarity_threshold
 
-        # Inyección de clientes. Si no se pasan, se crean a partir del config
-        # solo si la fuente está habilitada Y tenemos credenciales.
+        # Client injection. If not provided, they are created from config
+        # only if the source is enabled AND we have credentials.
         self.newsapi_client = newsapi_client
         self.gdelt_client = gdelt_client
         self.telegram_client = telegram_client
@@ -109,14 +109,14 @@ class NewsIngestor:
             from src.telegram_client import TelegramClient
             self.telegram_client = TelegramClient(config)
 
-        # Set de fuentes de alta reputación, normalizado en lower.
+        # Set of high-reputation sources, normalized to lowercase.
         configured = [
             s.replace("-", " ").lower()
             for s in (config.news.newsapi.sources or [])
         ]
         self._high_reputation = set(DEFAULT_HIGH_REPUTATION_SOURCES) | set(configured)
 
-        # Caché: keywords (tuple) → (timestamp, articles)
+        # Cache: keywords (tuple) → (timestamp, articles)
         self._cache: dict[tuple[str, ...], tuple[float, list[NewsArticle]]] = {}
 
         self._log = logger.bind(module="news_ingestor")
@@ -128,13 +128,13 @@ class NewsIngestor:
             ] if c is not None
         ]
         self._log.info(
-            "NewsIngestor inicializado: fuentes activas={}, dedup={:.2f}",
-            active or "ninguna",
+            "NewsIngestor initialized: active sources={}, dedup={:.2f}",
+            active or "none",
             self.dedup_threshold,
         )
 
     # =====================================================
-    # API pública
+    # Public API
     # =====================================================
 
     def fetch(
@@ -144,10 +144,10 @@ class NewsIngestor:
         force_refresh: bool = False,
         fallback_timespan: Optional[str] = None,
     ) -> list[NewsArticle]:
-        """Devuelve artículos relevantes a `keywords`, deduplicados y priorizados.
+        """Returns articles relevant to `keywords`, deduplicated and prioritized.
 
-        Si `fallback_timespan` está dado y la búsqueda normal no devuelve nada,
-        se reintenta con ese timespan ampliado en GDELT (ej. "7d").
+        If `fallback_timespan` is given and the normal search returns nothing,
+        it retries with that expanded timespan in GDELT (e.g. "7d").
         """
         if not keywords:
             return []
@@ -156,15 +156,15 @@ class NewsIngestor:
         if not cache_key:
             return []
 
-        # Caché
+        # Cache
         if not force_refresh:
             cached = self._cache.get(cache_key)
             if cached and (time.time() - cached[0]) < self.cache_ttl:
-                self._log.debug("Cache hit para {} keywords", len(cache_key))
+                self._log.debug("Cache hit for {} keywords", len(cache_key))
                 return cached[1][:max_articles]
 
-        # Fetch desde todas las fuentes habilitadas. Los fallos individuales
-        # no impiden que las otras fuentes contribuyan.
+        # Fetch from all enabled sources. Individual failures do not prevent
+        # other sources from contributing.
         all_raw: list[NewsArticle] = []
         clients = [
             ("NewsAPI", self.newsapi_client),
@@ -177,17 +177,17 @@ class NewsIngestor:
             try:
                 all_raw.extend(client.fetch_articles(list(keywords)))
             except Exception as exc:
-                self._log.error("{} fetch falló: {}", name, exc)
+                self._log.error("{} fetch failed: {}", name, exc)
 
-        # FALLBACK: si no hubo nada y se nos dio timespan extendido, reintentar
-        # con GDELT (es el que más se beneficia: lookback más largo = más coverage)
+        # FALLBACK: if nothing was returned and an extended timespan was given,
+        # retry with GDELT (it benefits the most: longer lookback = more coverage)
         if not all_raw and fallback_timespan and self.gdelt_client is not None:
             self._log.info(
-                "Sin noticias frescas. Reintentando GDELT con timespan='{}'",
+                "No fresh news found. Retrying GDELT with timespan='{}'",
                 fallback_timespan,
             )
             try:
-                # gdelt_client acepta timespan kwarg
+                # gdelt_client accepts a timespan kwarg
                 fallback_articles = self.gdelt_client.fetch_articles(
                     list(keywords),
                     timespan=fallback_timespan,
@@ -195,12 +195,12 @@ class NewsIngestor:
                 all_raw.extend(fallback_articles)
                 if fallback_articles:
                     self._log.info(
-                        "Fallback con timespan {} encontró {} artículos",
+                        "Fallback with timespan {} found {} articles",
                         fallback_timespan,
                         len(fallback_articles),
                     )
             except Exception as exc:
-                self._log.warning("GDELT fallback falló: {}", exc)
+                self._log.warning("GDELT fallback failed: {}", exc)
 
         # Score
         for art in all_raw:
@@ -214,7 +214,7 @@ class NewsIngestor:
         self._cache[cache_key] = (time.time(), unique)
 
         self._log.info(
-            "Procesados {} artículos crudos → {} únicos tras dedup",
+            "Processed {} raw articles → {} unique after dedup",
             len(all_raw),
             len(unique),
         )
@@ -227,19 +227,19 @@ class NewsIngestor:
     def _score(self, article: NewsArticle, keywords: list[str]) -> float:
         score = 0.0
 
-        # 1) Recencia (max 30)
+        # 1) Recency (max 30)
         if article.published_at:
             delta = datetime.now(timezone.utc) - article.published_at
             hours_ago = max(0.0, delta.total_seconds() / 3600)
             score += max(0.0, 30 - hours_ago * (30 / 24))
 
-        # 2) Reputación de la fuente (max 30, mín 10)
+        # 2) Source reputation (max 30, min 10)
         if self._is_high_reputation(article.source_name):
             score += 30
         else:
             score += 10
 
-        # 3) Match de keywords (max 30; 10 pts por keyword único, tope 3)
+        # 3) Keyword match (max 30; 10 pts per unique keyword, cap at 3)
         text = f"{article.title} {article.description}".lower()
         matched: list[str] = []
         for kw in keywords:
@@ -251,7 +251,7 @@ class NewsIngestor:
         score += len(matched) * 10
         article.matched_keywords = matched
 
-        # 4) Marcadores de urgencia en el título (max 10)
+        # 4) Urgency markers in the title (max 10)
         title_upper = article.title.upper()
         if any(marker in title_upper for marker in URGENCY_MARKERS):
             score += 10
@@ -268,14 +268,14 @@ class NewsIngestor:
         return False
 
     # =====================================================
-    # Deduplicación
+    # Deduplication
     # =====================================================
 
     def _deduplicate(self, articles: list[NewsArticle]) -> list[NewsArticle]:
         if not articles:
             return []
 
-        # Paso 1: dedupe exacto por URL. Si hay duplicados, conserva el de mayor score.
+        # Step 1: exact dedup by URL. If duplicates exist, keep the one with the higher score.
         by_url: dict[str, NewsArticle] = {}
         for art in articles:
             existing = by_url.get(art.url)
@@ -283,10 +283,10 @@ class NewsIngestor:
                 by_url[art.url] = art
         unique_url = list(by_url.values())
 
-        # Paso 2: dedupe difuso por título. Procesamos en orden descendente de
-        # score para que el "ganador" del cluster sea siempre el de mayor score.
+        # Step 2: fuzzy dedup by title. Process in descending score order so
+        # the cluster "winner" is always the one with the highest score.
         unique_url.sort(key=lambda a: a.preliminary_impact_score, reverse=True)
-        threshold_pct = self.dedup_threshold * 100  # rapidfuzz devuelve 0-100
+        threshold_pct = self.dedup_threshold * 100  # rapidfuzz returns 0-100
         result: list[NewsArticle] = []
         seen_titles: list[str] = []
         for art in unique_url:

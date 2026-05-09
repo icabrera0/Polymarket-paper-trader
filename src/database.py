@@ -1,21 +1,21 @@
 """
-Persistencia SQLite del bot.
+SQLite persistence layer for the bot.
 
-Capa fina sobre el módulo `sqlite3` de la stdlib. NO usamos ORM porque el
-modelo de datos es simple y queremos mantener mínimas las dependencias.
+Thin wrapper over the stdlib `sqlite3` module. No ORM is used because the
+data model is simple and we want to keep dependencies minimal.
 
-Tablas:
-  - trades              → todas las posiciones (abiertas y cerradas)
-  - balance_history     → snapshot del balance cada vez que cambia
-  - decisions_log       → cada TradeDecision emitida (incluyendo NO_TRADE)
-  - analyses_log        → cada MarketAnalysis del LLM para auditoría / reporte
+Tables:
+  - trades              → all positions (open and closed)
+  - balance_history     → balance snapshot every time it changes
+  - decisions_log       → every TradeDecision emitted (including NO_TRADE)
+  - analyses_log        → every LLM MarketAnalysis for auditing / reporting
 
-Convenciones:
-- Todas las fechas se guardan como ISO 8601 UTC string (no timestamps numéricos:
-  son legibles desde DB Browser, no se rompen con cambios de zona horaria).
-- Importes en EUR (paper trading); convertimos a USD donde aplique.
-- Ningún método tira excepción al caller — loguean warning y continúan.
-  El bot debe poder seguir operando aunque la DB falle puntualmente.
+Conventions:
+- All dates are stored as ISO 8601 UTC strings (not numeric timestamps:
+  they are readable from DB Browser and do not break with timezone changes).
+- Amounts in EUR (paper trading); converted to USD where applicable.
+- No method raises an exception to the caller — they log a warning and continue.
+  The bot must be able to keep operating even if the DB fails occasionally.
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ def _iso_to_datetime(s: Optional[str]) -> Optional[datetime]:
 
 
 class Database:
-    """Wrapper sobre sqlite3 con métodos específicos del bot."""
+    """Wrapper around sqlite3 with bot-specific methods."""
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
@@ -170,7 +170,7 @@ class Database:
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
-        self._log.debug("Base de datos inicializada en {}", self.db_path)
+        self._log.debug("Database initialized at {}", self.db_path)
 
     def _init_schema(self) -> None:
         try:
@@ -181,7 +181,7 @@ class Database:
                 self._conn.execute("ALTER TABLE trades ADD COLUMN market_slug TEXT NOT NULL DEFAULT ''")
                 self._log.info("Migrated trades table: added market_slug column")
         except sqlite3.Error as exc:
-            self._log.error("Error inicializando schema: {}", exc)
+            self._log.error("Error initializing schema: {}", exc)
             raise
 
     def close(self) -> None:
@@ -234,7 +234,7 @@ class Database:
             )
             return True
         except sqlite3.Error as exc:
-            self._log.error("insert_trade falló: {}", exc)
+            self._log.error("insert_trade failed: {}", exc)
             return False
 
     def update_trade_close(self, position: Position) -> bool:
@@ -260,7 +260,7 @@ class Database:
             )
             return True
         except sqlite3.Error as exc:
-            self._log.error("update_trade_close falló: {}", exc)
+            self._log.error("update_trade_close failed: {}", exc)
             return False
 
     def get_open_positions(self) -> list[Position]:
@@ -270,7 +270,7 @@ class Database:
             )
             return [self._row_to_position(row) for row in cur.fetchall()]
         except sqlite3.Error as exc:
-            self._log.error("get_open_positions falló: {}", exc)
+            self._log.error("get_open_positions failed: {}", exc)
             return []
 
     def get_all_trades(self) -> list[Position]:
@@ -280,7 +280,7 @@ class Database:
             )
             return [self._row_to_position(row) for row in cur.fetchall()]
         except sqlite3.Error as exc:
-            self._log.error("get_all_trades falló: {}", exc)
+            self._log.error("get_all_trades failed: {}", exc)
             return []
 
     def get_trades_in_range(
@@ -297,7 +297,7 @@ class Database:
             )
             return [self._row_to_position(row) for row in cur.fetchall()]
         except sqlite3.Error as exc:
-            self._log.error("get_trades_in_range falló: {}", exc)
+            self._log.error("get_trades_in_range failed: {}", exc)
             return []
 
     @staticmethod
@@ -359,7 +359,7 @@ class Database:
             )
             return True
         except sqlite3.Error as exc:
-            self._log.error("log_balance falló: {}", exc)
+            self._log.error("log_balance failed: {}", exc)
             return False
 
     def get_balance_history(
@@ -378,7 +378,7 @@ class Database:
                 )
             return [dict(row) for row in cur.fetchall()]
         except sqlite3.Error as exc:
-            self._log.error("get_balance_history falló: {}", exc)
+            self._log.error("get_balance_history failed: {}", exc)
             return []
 
     # =====================================================
@@ -409,7 +409,7 @@ class Database:
             )
             return True
         except sqlite3.Error as exc:
-            self._log.error("log_decision falló: {}", exc)
+            self._log.error("log_decision failed: {}", exc)
             return False
 
     def log_analysis(self, analysis: MarketAnalysis) -> bool:
@@ -447,7 +447,7 @@ class Database:
             )
             return True
         except sqlite3.Error as exc:
-            self._log.error("log_analysis falló: {}", exc)
+            self._log.error("log_analysis failed: {}", exc)
             return False
 
     def __enter__(self) -> "Database":

@@ -1,16 +1,16 @@
 """
-Market Scanner — descubre y filtra mercados operables en Polymarket.
+Market Scanner — discovers and filters tradeable markets on Polymarket.
 
-Responsabilidades:
-1. Pedir mercados crudos a la Gamma API (vía GammaApiClient).
-2. Parsearlos a `MarketSnapshot` validados, descartando los mal formados.
-3. Aplicar los filtros del config (volumen, spread, tiempo a cierre, categoría).
-4. Cachear el resultado durante un TTL corto para no machacar la API.
-5. Exponer una búsqueda por palabras clave para que el DECISION_ENGINE pueda
-   cruzar mercados con noticias.
+Responsibilities:
+1. Request raw markets from the Gamma API (via GammaApiClient).
+2. Parse them into validated `MarketSnapshot` objects, discarding malformed ones.
+3. Apply config filters (volume, spread, time to close, category).
+4. Cache the result for a short TTL to avoid hammering the API.
+5. Expose a keyword search so the DECISION_ENGINE can cross-reference
+   markets with news.
 
-El scanner NO toma decisiones de trading. Solo identifica el universo de
-mercados sobre los que vale la pena pensar.
+The scanner does NOT make trading decisions. It only identifies the universe of
+markets worth thinking about.
 """
 
 from __future__ import annotations
@@ -26,13 +26,13 @@ from src.config_loader import BotConfig
 from src.gamma_client import GammaApiClient, GammaApiError
 from src.models import MarketSnapshot
 
-# TTL del caché de escaneo (segundos). Independiente del intervalo de polling
-# del config (que controla cada cuánto el orquestador decide escanear).
+# Scan cache TTL (seconds). Independent of the polling interval in config
+# (which controls how often the orchestrator decides to scan).
 DEFAULT_SCAN_CACHE_TTL = 60.0
 
 
 class MarketScanner:
-    """Descubre mercados de Polymarket que cumplen los filtros configurados."""
+    """Discovers Polymarket markets that pass the configured filters."""
 
     def __init__(
         self,
@@ -57,10 +57,10 @@ class MarketScanner:
     # =====================================================
 
     def parse_market(self, raw: dict[str, Any]) -> Optional[MarketSnapshot]:
-        """Convierte un dict crudo de la Gamma API en un MarketSnapshot.
+        """Converts a raw dict from the Gamma API into a MarketSnapshot.
 
-        Devuelve None si el mercado está mal formado (campos faltantes,
-        formatos inesperados). Nunca lanza excepción.
+        Returns None if the market is malformed (missing fields,
+        unexpected formats). Never raises an exception.
         """
         try:
             market_id = str(raw["id"])
@@ -68,23 +68,22 @@ class MarketScanner:
             if not question:
                 return None
 
-            # Tokens CLOB. Pueden venir como lista o como string JSON.
+            # CLOB tokens. May come as a list or as a JSON string.
             yes_token, no_token = self._parse_token_pair(raw.get("clobTokenIds"))
             if yes_token is None or no_token is None:
                 return None
 
-            # Precios YES/NO. Mismo problema: lista o string JSON.
+            # YES/NO prices. Same issue: list or JSON string.
             yes_price, no_price = self._parse_price_pair(raw.get("outcomePrices"))
             if yes_price is None or no_price is None:
                 return None
 
-            # Validación: precios deben estar en (0, 1) — Polymarket no permite 0/1
-            # exactos en mercados activos. Si los vemos, el mercado probablemente
-            # ya está resuelto.
+            # Validation: prices must be in (0, 1) — Polymarket does not allow exact 0/1
+            # in active markets. If we see them, the market is likely already resolved.
             if not (0 < yes_price < 1) or not (0 < no_price < 1):
                 return None
 
-            # Mejor bid/ask si están disponibles
+            # Best bid/ask if available
             best_bid = self._safe_float(raw.get("bestBid"))
             best_ask = self._safe_float(raw.get("bestAsk"))
             if best_bid is not None and not (0 < best_bid < 1):
@@ -92,20 +91,20 @@ class MarketScanner:
             if best_ask is not None and not (0 < best_ask < 1):
                 best_ask = None
 
-            # Spread: si hay bid/ask reales, ese es el spread. Si no, lo
-            # aproximamos como (1 - yes - no), que mide la inconsistencia
-            # entre los lados.
+            # Spread: if real bid/ask are available, that is the spread. Otherwise,
+            # we approximate it as (1 - yes - no), which measures inconsistency
+            # between the two sides.
             if best_bid is not None and best_ask is not None and best_ask >= best_bid:
                 spread = best_ask - best_bid
             else:
                 spread = max(0.0, 1.0 - yes_price - no_price)
 
-            # Volumen y liquidez
+            # Volume and liquidity
             volume_24h = self._safe_float(raw.get("volume24hr")) or 0.0
             volume_total = self._safe_float(raw.get("volumeNum")) or 0.0
             liquidity = self._safe_float(raw.get("liquidityNum")) or 0.0
 
-            # Fecha de cierre
+            # Close date
             end_date = self._parse_iso_datetime(raw.get("endDate"))
 
             return MarketSnapshot(
@@ -131,18 +130,18 @@ class MarketScanner:
             )
         except (KeyError, ValueError, TypeError) as exc:
             self._log.debug(
-                "Mercado mal formado, descartado: {} | raw_id={}",
+                "Malformed market, discarded: {} | raw_id={}",
                 exc,
                 raw.get("id"),
             )
             return None
 
     # =====================================================
-    # Filtros
+    # Filters
     # =====================================================
 
     def is_tradeable(self, market: MarketSnapshot) -> tuple[bool, list[str]]:
-        """Decide si un mercado pasa los filtros. Devuelve (ok, motivos_rechazo)."""
+        """Decides whether a market passes the filters. Returns (ok, rejection_reasons)."""
         reasons: list[str] = []
 
         if not market.is_active or market.is_closed:
@@ -154,7 +153,7 @@ class MarketScanner:
         if market.spread > self.filters.max_spread_cents:
             reasons.append("wide_spread")
 
-        # Tiempo a cierre
+        # Time to close
         ttc = market.time_to_close_hours
         if ttc is not None:
             if ttc < self.filters.min_time_to_close_hours:
@@ -162,7 +161,7 @@ class MarketScanner:
             elif ttc > self.filters.max_time_to_close_days * 24:
                 reasons.append("closing_too_far")
 
-        # Categorías excluidas
+        # Excluded categories
         if market.category and self.filters.exclude_categories:
             excluded = [c.lower() for c in self.filters.exclude_categories]
             if market.category.lower() in excluded:
@@ -171,14 +170,14 @@ class MarketScanner:
         return len(reasons) == 0, reasons
 
     # =====================================================
-    # Escaneo principal (con caché)
+    # Main scan (with cache)
     # =====================================================
 
     def scan(self, force_refresh: bool = False) -> list[MarketSnapshot]:
-        """Escanea, parsea y filtra. Devuelve mercados operables.
+        """Scans, parses, and filters. Returns tradeable markets.
 
-        Usa caché interno con TTL. Pasa `force_refresh=True` para ignorarlo.
-        Si la API falla, devuelve la última lista cacheada (o vacía si no hay).
+        Uses internal cache with TTL. Pass `force_refresh=True` to bypass it.
+        If the API fails, returns the last cached list (or empty if none).
         """
         now = time.time()
         if (
@@ -191,8 +190,8 @@ class MarketScanner:
         try:
             raw_markets = self.client.fetch_all_active_markets()
         except GammaApiError as exc:
-            self._log.error("Escaneo abortado por error de API: {}", exc)
-            return self._cache  # Devolvemos lo último cacheado, aunque esté viejo
+            self._log.error("Scan aborted due to API error: {}", exc)
+            return self._cache  # Return the last cached result, even if stale
 
         snapshots: list[MarketSnapshot] = []
         for raw in raw_markets:
@@ -211,11 +210,11 @@ class MarketScanner:
                     rejection_counter[r] = rejection_counter.get(r, 0) + 1
 
         self._log.info(
-            "Escaneo: {} crudos → {} parseados → {} operables. Rechazos: {}",
+            "Scan: {} raw → {} parsed → {} tradeable. Rejections: {}",
             len(raw_markets),
             len(snapshots),
             len(tradeable),
-            rejection_counter or "ninguno",
+            rejection_counter or "none",
         )
 
         self._cache = tradeable
@@ -223,7 +222,7 @@ class MarketScanner:
         return tradeable
 
     # =====================================================
-    # Selección inteligente de candidatos
+    # Smart candidate selection
     # =====================================================
 
     def select_candidates(
@@ -232,34 +231,34 @@ class MarketScanner:
         max_candidates: int = 10,
         min_uncertainty: float = 0.10,
     ) -> list[MarketSnapshot]:
-        """Selecciona mercados que MERECEN ser analizados.
+        """Selects markets that DESERVE to be analyzed.
 
-        Filtra:
-        - Mercados con precios pegados a 0 o 1 (resueltos de facto, sin edge).
-        - Mercados con incertidumbre menor a `min_uncertainty` (ej: <10% gap).
+        Filters out:
+        - Markets with prices stuck at 0 or 1 (de-facto resolved, no edge).
+        - Markets with uncertainty below `min_uncertainty` (e.g. <10% gap).
 
-        Ordena por:
-        - Incertidumbre (cercanía a 0.5) DESC: cuanto más incierto, más
-          probable que las noticias muevan el precio.
-        - Dentro del mismo nivel, volumen 24h DESC (más volumen = mejor
-          ejecución posible).
+        Sorts by:
+        - Uncertainty (closeness to 0.5) DESC: the more uncertain, the more
+          likely news will move the price.
+        - Within the same level, volume 24h DESC (more volume = better
+          possible execution).
 
-        Esto evita gastar análisis en mercados como "Cubs vs Padres a YES=1.0".
+        This avoids wasting analysis on markets like "Cubs vs Padres at YES=1.0".
         """
         candidates = []
         for m in markets:
-            # Distancia al 0.5 — un mercado a 0.5 tiene incertidumbre máxima
+            # Distance to 0.5 — a market at 0.5 has maximum uncertainty
             uncertainty = 0.5 - abs(m.yes_price - 0.5)
             if uncertainty < min_uncertainty:
                 continue
             candidates.append((uncertainty, m.volume_24h_usd, m))
 
-        # Ordenar por uncertainty desc, volumen desc
+        # Sort by uncertainty desc, volume desc
         candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
         result = [m for (_, _, m) in candidates[:max_candidates]]
 
         self._log.info(
-            "select_candidates: {} mercados → {} candidatos analizables "
+            "select_candidates: {} markets → {} analyzable candidates "
             "(min_uncertainty={:.2f})",
             len(markets),
             len(result),
@@ -268,18 +267,18 @@ class MarketScanner:
         return result
 
     # =====================================================
-    # Escaneo deportivo (módulo secundario sports_in_play)
+    # Sports scan (secondary sports_in_play module)
     # =====================================================
 
     def scan_sports_candidates(
         self,
         force_refresh: bool = False,
     ) -> list[MarketSnapshot]:
-        """Escanea mercados de partidos deportivos en directo para el módulo sports_in_play.
+        """Scans live sports match markets for the sports_in_play module.
 
-        Completamente independiente del scan() principal — bypasea exclude_categories
-        y aplica sus propios filtros específicos de deportes.
-        Tiene su propio caché con el mismo TTL que el scan principal.
+        Completely independent of the main scan() — bypasses exclude_categories
+        and applies its own sports-specific filters.
+        Has its own cache with the same TTL as the main scan.
         """
         cfg = self.config.sports_in_play
         now = time.time()
@@ -293,7 +292,7 @@ class MarketScanner:
         try:
             raw_markets = self.client.fetch_all_active_markets(max_markets=500)
         except GammaApiError as exc:
-            self._log.warning("Sports scan abortado: {}", exc)
+            self._log.warning("Sports scan aborted: {}", exc)
             return self._sports_cache
 
         cats_lower = {c.lower() for c in cfg.scan_categories}
@@ -304,30 +303,30 @@ class MarketScanner:
             if snap is None:
                 continue
 
-            # Solo categorías deportivas
+            # Only sports categories
             if snap.category.lower() not in cats_lower:
                 continue
 
-            # YES dentro del rango para apostar NO al underdog
+            # YES within range to bet NO on the underdog
             if not (cfg.min_yes_price <= snap.yes_price <= cfg.max_yes_price):
                 continue
 
-            # Partido cercano al cierre (en curso o inminente)
+            # Match close to closing (in progress or imminent)
             ttc = snap.time_to_close_hours
             if ttc is None or ttc > cfg.max_time_to_close_hours:
                 continue
 
-            # Liquidez mínima
+            # Minimum liquidity
             if snap.volume_24h_usd < cfg.min_volume_24h_usd:
                 continue
 
             candidates.append(snap)
 
-        # Ordenar por YES price desc (favorito más dominante → mejor asimetría en NO)
+        # Sort by YES price desc (most dominant favorite → best asymmetry on NO)
         candidates.sort(key=lambda m: m.yes_price, reverse=True)
 
         self._log.info(
-            "Sports scan: {} candidatos in-play (YES={:.0%}–{:.0%}, cierre<{:.0f}h)",
+            "Sports scan: {} in-play candidates (YES={:.0%}–{:.0%}, close<{:.0f}h)",
             len(candidates),
             cfg.min_yes_price,
             cfg.max_yes_price,
@@ -338,7 +337,7 @@ class MarketScanner:
         return candidates
 
     # =====================================================
-    # Búsqueda por keywords (cruce con noticias)
+    # Keyword search (cross-reference with news)
     # =====================================================
 
     def search_by_keywords(
@@ -347,12 +346,12 @@ class MarketScanner:
         keywords: list[str],
         match_in_description: bool = True,
     ) -> list[MarketSnapshot]:
-        """Filtra mercados que mencionen alguno de los keywords.
+        """Filters markets that mention any of the keywords.
 
-        Búsqueda case-insensitive sobre la pregunta y opcionalmente la
-        descripción. Para cruces más sofisticados (entidades nombradas,
-        embeddings), el DECISION_ENGINE decidirá qué hacer en módulos
-        posteriores; aquí basta con filtrado por substring.
+        Case-insensitive search over the question and optionally the
+        description. For more sophisticated matching (named entities,
+        embeddings), the DECISION_ENGINE will decide what to do in later
+        modules; here substring filtering is sufficient.
         """
         if not keywords:
             return []
@@ -370,7 +369,7 @@ class MarketScanner:
         return results
 
     # =====================================================
-    # Re-ranking con sesgo de categoría (cobertura mediática)
+    # Re-ranking with category bias (media coverage)
     # =====================================================
 
     def rank_for_analysis(
@@ -379,16 +378,16 @@ class MarketScanner:
         category_boost: dict[str, float],
         top_n: int = 15,
     ) -> list[MarketSnapshot]:
-        """Reordena los mercados aplicando un boost de categoría.
+        """Reorders markets by applying a category boost.
 
-        Los mercados con categorías que tienen alta cobertura mediática
-        (Politics, Crypto, Geopolitics) se priorizan sobre Esports/Sports
-        regionales que casi no salen en GDELT.
+        Markets in categories with high media coverage
+        (Politics, Crypto, Geopolitics) are prioritized over regional Esports/Sports
+        that barely appear in GDELT.
 
-        Score = log(volume_24h) × boost_categoria
+        Score = log(volume_24h) × category_boost
 
-        Devuelve los top_n para mandar al sentiment analyzer. Si el universo
-        de mercados es menor que top_n, devuelve todos.
+        Returns the top_n to send to the sentiment analyzer. If the market
+        universe is smaller than top_n, returns all of them.
         """
         import math
 
@@ -399,7 +398,7 @@ class MarketScanner:
             base = math.log10(max(1.0, m.volume_24h_usd))
             boost = 1.0
             if m.category and category_boost:
-                # Match case-insensitive
+                # Case-insensitive match
                 cat_lower = m.category.lower()
                 for cat_key, mult in category_boost.items():
                     if cat_key.lower() == cat_lower:
@@ -411,12 +410,12 @@ class MarketScanner:
         return ranked[:top_n]
 
     # =====================================================
-    # Helpers privados
+    # Private helpers
     # =====================================================
 
     @staticmethod
     def _safe_float(value: Any) -> Optional[float]:
-        """Convierte a float devolviendo None si no es posible."""
+        """Converts to float, returning None if not possible."""
         if value is None:
             return None
         try:
@@ -426,7 +425,7 @@ class MarketScanner:
 
     @staticmethod
     def _parse_token_pair(value: Any) -> tuple[Optional[str], Optional[str]]:
-        """Devuelve (yes_token_id, no_token_id) o (None, None)."""
+        """Returns (yes_token_id, no_token_id) or (None, None)."""
         items = MarketScanner._parse_list_or_json(value)
         if items is None or len(items) < 2:
             return None, None
@@ -437,7 +436,7 @@ class MarketScanner:
 
     @staticmethod
     def _parse_price_pair(value: Any) -> tuple[Optional[float], Optional[float]]:
-        """Devuelve (yes_price, no_price) o (None, None)."""
+        """Returns (yes_price, no_price) or (None, None)."""
         items = MarketScanner._parse_list_or_json(value)
         if items is None or len(items) < 2:
             return None, None
@@ -448,7 +447,7 @@ class MarketScanner:
 
     @staticmethod
     def _parse_list_or_json(value: Any) -> Optional[list[Any]]:
-        """La Gamma API a veces devuelve listas como string JSON. Normalizamos."""
+        """The Gamma API sometimes returns lists as JSON strings. We normalize."""
         if value is None:
             return None
         if isinstance(value, list):
@@ -464,11 +463,11 @@ class MarketScanner:
 
     @staticmethod
     def _parse_iso_datetime(value: Any) -> Optional[datetime]:
-        """Parsea una cadena ISO 8601 a datetime con tz UTC. Tolerante."""
+        """Parses an ISO 8601 string to a UTC-aware datetime. Tolerant."""
         if not value or not isinstance(value, str):
             return None
         try:
-            # Soporta 'Z' al final
+            # Supports trailing 'Z'
             normalized = value.replace("Z", "+00:00")
             dt = datetime.fromisoformat(normalized)
             if dt.tzinfo is None:

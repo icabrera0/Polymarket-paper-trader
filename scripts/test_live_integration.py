@@ -1,20 +1,20 @@
 """
-Prueba de integración completa: MarketScanner + NewsIngestor.
+Full integration test: MarketScanner + NewsIngestor.
 
-Hace todo el pipeline de la fase de descubrimiento:
+Runs the entire discovery phase pipeline:
 
-1. Conecta a Polymarket y obtiene los top mercados por volumen 24h.
-2. Extrae automáticamente keywords significativos de las preguntas.
-3. Busca noticias recientes sobre esos keywords en las fuentes configuradas.
-4. Muestra todo correlacionado: cada mercado con las noticias que lo afectan.
+1. Connects to Polymarket and fetches the top markets by 24h volume.
+2. Automatically extracts significant keywords from the questions.
+3. Searches for recent news about those keywords from configured sources.
+4. Shows everything correlated: each market with the news that affects it.
 
-Útil para validar la cadena completa antes de meter Claude (módulo siguiente).
+Useful for validating the full chain before adding Claude (next module).
 
-Ejecutar:
+Run:
     python scripts/test_live_integration.py
 
-Las API keys se leen de .env. Si no tienes ninguna, deja al menos GDELT
-habilitado en config/settings.yaml (no requiere credenciales).
+API keys are read from .env. If you don't have any, leave at least GDELT
+enabled in config/settings.yaml (no credentials required).
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ from src.news_ingestor import NewsIngestor  # noqa: E402
 from src.models import MarketSnapshot, NewsArticle  # noqa: E402
 
 
-# Stopwords mínimos para que las preguntas tipo "Will X happen by Y?" no
-# contaminen la búsqueda con palabras irrelevantes.
+# Minimal stopwords so questions like "Will X happen by Y?" don't
+# contaminate the search with irrelevant words.
 STOPWORDS = {
     "will", "the", "a", "an", "is", "are", "be", "by", "of", "in", "on",
     "at", "to", "for", "and", "or", "if", "than", "more", "less", "this",
@@ -42,21 +42,21 @@ STOPWORDS = {
     "have", "has", "had", "win", "wins", "won", "do", "does", "did",
     "can", "could", "should", "would", "may", "might", "first", "next",
     "year", "month", "week", "day", "much", "many", "make", "makes",
-    "made", "election", "vote",  # demasiado genéricos en mercados políticos
+    "made", "election", "vote",  # too generic in political markets
 }
 
 
 def extract_keywords(question: str, max_kw: int = 4) -> list[str]:
-    """Saca palabras clave de una pregunta de mercado.
+    """Extracts keywords from a market question.
 
-    Heurística simple:
-    - Palabras de 4+ letras
-    - Sin stopwords
-    - Prioriza las que empiezan con mayúscula (entidades nombradas)
+    Simple heuristic:
+    - Words with 4+ letters
+    - Without stopwords
+    - Prioritizes words starting with uppercase (named entities)
     """
-    # Mantenemos la capitalización original para detectar entidades
+    # Keep original capitalization to detect entities
     words = re.findall(r"\b[A-Za-z][A-Za-z0-9'-]{3,}\b", question)
-    # Separar entidades (Capitalized) de comunes
+    # Separate entities (Capitalized) from common words
     entities = []
     common = []
     for w in words:
@@ -66,7 +66,7 @@ def extract_keywords(question: str, max_kw: int = 4) -> list[str]:
             entities.append(w)
         else:
             common.append(w.lower())
-    # Mantener orden, dedup, entidades primero
+    # Maintain order, dedup, entities first
     seen = set()
     result = []
     for w in entities + common:
@@ -95,13 +95,13 @@ def print_market(idx: int, m: MarketSnapshot) -> None:
     )
     if m.end_date:
         ttc = m.time_to_close_hours or 0
-        print(f"   Cierra en {ttc:.0f}h ({m.end_date.strftime('%Y-%m-%d %H:%M UTC')})")
+        print(f"   Closes in {ttc:.0f}h ({m.end_date.strftime('%Y-%m-%d %H:%M UTC')})")
 
 
 def print_article(art: NewsArticle, indent: str = "      ") -> None:
     title = art.title[:90] + ("..." if len(art.title) > 90 else "")
     print(f"{indent}[{art.preliminary_impact_score:5.1f}] {title}")
-    src_name = art.source_name or "(sin nombre)"
+    src_name = art.source_name or "(no name)"
     print(f"{indent}        {art.source.value:<8} | {src_name}")
     if art.matched_keywords:
         print(f"{indent}        matched: {art.matched_keywords}")
@@ -110,30 +110,30 @@ def print_article(art: NewsArticle, indent: str = "      ") -> None:
 def main() -> None:
     config = load_config()
 
-    # ---------- Fase 1: mercados ----------
-    print_section("PASO 1 — Escaneo de mercados Polymarket")
+    # ---------- Phase 1: markets ----------
+    print_section("STEP 1 — Polymarket market scan")
     scanner = MarketScanner(config)
-    print("Conectando a Gamma API y filtrando mercados operables...")
+    print("Connecting to Gamma API and filtering tradeable markets...")
     markets = scanner.scan(force_refresh=True)
-    print(f"\n→ {len(markets)} mercados pasan los filtros.")
+    print(f"\n→ {len(markets)} markets pass the filters.")
 
     if not markets:
         f = config.market_filters
-        print("\nFiltros aplicados:")
-        print(f"  - Volumen 24h mínimo: ${f.min_volume_24h_usd:,.0f}")
-        print(f"  - Spread máximo: {f.max_spread_cents}")
-        print(f"  - Tiempo a cierre: {f.min_time_to_close_hours}h - "
-              f"{f.max_time_to_close_days} días")
-        print("\nPrueba a relajar los filtros en config/settings.yaml.")
+        print("\nApplied filters:")
+        print(f"  - Min 24h volume: ${f.min_volume_24h_usd:,.0f}")
+        print(f"  - Max spread: {f.max_spread_cents}")
+        print(f"  - Time to close: {f.min_time_to_close_hours}h - "
+              f"{f.max_time_to_close_days} days")
+        print("\nTry relaxing the filters in config/settings.yaml.")
         return
 
     top_markets = markets[:5]
-    print(f"\nTop {len(top_markets)} por volumen:")
+    print(f"\nTop {len(top_markets)} by volume:")
     for i, m in enumerate(top_markets, 1):
         print_market(i, m)
 
-    # ---------- Fase 2: keywords ----------
-    print_section("PASO 2 — Extracción de keywords")
+    # ---------- Phase 2: keywords ----------
+    print_section("STEP 2 — Keyword extraction")
     market_keywords: dict[str, list[str]] = {}
     all_keywords_set: set[str] = set()
     for m in top_markets:
@@ -144,27 +144,27 @@ def main() -> None:
         print(f"  → {kws}")
 
     all_keywords = sorted(all_keywords_set)
-    print(f"\n→ Total keywords únicos: {len(all_keywords)}")
+    print(f"\n→ Total unique keywords: {len(all_keywords)}")
 
-    # ---------- Fase 3: noticias globales ----------
-    print_section("PASO 3 — Ingesta de noticias")
+    # ---------- Phase 3: global news ----------
+    print_section("STEP 3 — News ingestion")
     ingestor = NewsIngestor(config)
     sources_active = []
     if ingestor.newsapi_client is not None: sources_active.append("NewsAPI")
     if ingestor.gdelt_client is not None: sources_active.append("GDELT")
     if ingestor.telegram_client is not None: sources_active.append("Telegram")
-    print(f"Fuentes activas: {sources_active or 'NINGUNA'}")
+    print(f"Active sources: {sources_active or 'NONE'}")
 
     if not sources_active:
-        print("\n⚠ Ninguna fuente activa. Activa al menos una en settings.yaml")
-        print("  (gdelt es la opción más fácil — no requiere credenciales)")
+        print("\n⚠ No active sources. Enable at least one in settings.yaml")
+        print("  (gdelt is the easiest option — no credentials required)")
         return
 
-    print(f"\nBuscando noticias para {len(all_keywords)} keywords (timespan=24h)...")
-    # Override del timespan para tener mejor probabilidad de encontrar matches
-    # en una prueba puntual. En producción usa el del config.
+    print(f"\nSearching news for {len(all_keywords)} keywords (timespan=24h)...")
+    # Override timespan to improve the chance of finding matches
+    # in a one-off test. In production it uses the one from config.
     if ingestor.gdelt_client is not None:
-        # Forzar timespan más amplio para esta prueba puntual
+        # Force wider timespan for this one-off test
         original_fetch = ingestor.gdelt_client.fetch_articles
         def wrapped_fetch(keywords, **kwargs):
             kwargs.setdefault("timespan", "24h")
@@ -174,29 +174,29 @@ def main() -> None:
     articles = ingestor.fetch(all_keywords[:15], max_articles=20, force_refresh=True)
 
     if not articles:
-        print("\nNo se encontraron noticias. Posibles causas:")
-        print("  - Los mercados con más volumen ahora son sobre eventos muy")
-        print("    nicho (deportes, esports) que no salen en prensa generalista.")
-        print("  - GDELT necesita actualizar sus indexes (~15 min de delay).")
-        print("  - Tus keywords son demasiado específicos (ej: 'Lehecka').")
-        print("  - Las API keys de NewsAPI son inválidas.")
-        print("\nPrueba a:")
-        print("  - Filtrar por categoría 'Politics' en config (más cobertura).")
-        print("  - Activar Telegram con canales generalistas como @bbcbreaking.")
-        print("  - Ampliar timespan en config a '7d' temporalmente.")
+        print("\nNo news found. Possible causes:")
+        print("  - The highest-volume markets are about very niche events")
+        print("    (sports, esports) that don't appear in mainstream press.")
+        print("  - GDELT needs to update its indexes (~15 min delay).")
+        print("  - Your keywords are too specific (e.g.: 'Lehecka').")
+        print("  - NewsAPI keys are invalid.")
+        print("\nTry:")
+        print("  - Filtering by 'Politics' category in config (better coverage).")
+        print("  - Enabling Telegram with general channels like @bbcbreaking.")
+        print("  - Expanding timespan in config to '7d' temporarily.")
         return
 
-    print(f"\n→ {len(articles)} artículos tras dedup, ordenados por score:")
+    print(f"\n→ {len(articles)} articles after dedup, sorted by score:")
     for art in articles[:10]:
         print_article(art, indent="  ")
 
-    # ---------- Fase 4: correlación ----------
-    print_section("PASO 4 — Correlación mercado ↔ noticias")
+    # ---------- Phase 4: correlation ----------
+    print_section("STEP 4 — Market ↔ news correlation")
     for m in top_markets:
         kws = market_keywords[m.market_id]
         if not kws:
             continue
-        # Filtrar noticias que matchean al menos un keyword de este mercado
+        # Filter news that match at least one keyword for this market
         kws_lower = {k.lower() for k in kws}
         relevant = [
             a for a in articles
@@ -211,8 +211,8 @@ def main() -> None:
 
     print()
     print("═" * 78)
-    print("  Pipeline completo. El siguiente módulo (SENTIMENT_ANALYZER)")
-    print("  pasará estas correlaciones a Claude para análisis cuantitativo.")
+    print("  Pipeline complete. The next module (SENTIMENT_ANALYZER)")
+    print("  will pass these correlations to Claude for quantitative analysis.")
     print("═" * 78)
 
 

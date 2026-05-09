@@ -1,17 +1,17 @@
 """
-Tests del PaperTrader y Database.
+Tests for the PaperTrader and Database.
 
-Cubren:
-- Apertura simulada con slippage correctamente aplicado
-- Cálculo de P&L (gain y loss) con la fórmula de Polymarket
-- Persistencia en SQLite (insert + update + queries)
-- Anti-balance-negativo
-- Restauración de posiciones abiertas tras reinicio
+Cover:
+- Simulated opening with slippage correctly applied
+- P&L calculation (gain and loss) with the Polymarket formula
+- SQLite persistence (insert + update + queries)
+- Anti-negative-balance
+- Restoration of open positions after restart
 - Mass close
 
-Usan SQLite en archivo temporal con tmp_path de pytest. Cada test es aislado.
+Uses SQLite in a temporary file with pytest's tmp_path. Each test is isolated.
 
-Ejecutar:
+Run:
     pytest tests/test_paper_trader.py -v
 """
 
@@ -167,7 +167,7 @@ class TestDatabase:
 
 
 # =====================================================
-# PaperTrader: apertura
+# PaperTrader: opening
 # =====================================================
 
 
@@ -193,35 +193,35 @@ class TestExecuteDecision:
         assert position.status == TradeStatus.OPEN
 
     def test_aplica_slippage_en_compra(self, trader):
-        # config tiene simulated_slippage_pct=0.005 (0.5%)
+        # config has simulated_slippage_pct=0.005 (0.5%)
         decision = make_open_decision(entry_price=0.40, size_eur=20.0)
         position = trader.execute_decision(decision)
-        # Precio efectivo debe ser ligeramente superior al de la decisión
+        # Effective price must be slightly higher than the decision price
         assert position.entry_price > 0.40
         assert position.entry_price == pytest.approx(0.40 * 1.005)
 
     def test_calcula_tokens_correctamente(self, trader):
         decision = make_open_decision(entry_price=0.40, size_eur=20.0)
         position = trader.execute_decision(decision)
-        # size_usd ~ 20 * 1.07 = 21.4; precio efectivo 0.402; tokens ~ 53.23
+        # size_usd ~ 20 * 1.07 = 21.4; effective price 0.402; tokens ~ 53.23
         expected_tokens = (20.0 * 1.07) / (0.40 * 1.005)
         assert position.tokens_quantity == pytest.approx(expected_tokens, rel=0.001)
 
     def test_balance_insuficiente_retorna_none(self, config_factory):
-        # Balance muy pequeño
+        # Very small balance
         cfg = config_factory(paper_trading_overrides={"initial_balance_eur": 10.0})
         rm = RiskManager(cfg, 10.0)
         from tempfile import NamedTemporaryFile
         with NamedTemporaryFile(suffix=".db", delete=False) as tf:
             db = Database(tf.name)
             trader = PaperTrader(cfg, rm, db=db)
-            decision = make_open_decision(size_eur=50.0)  # más que el balance
+            decision = make_open_decision(size_eur=50.0)  # more than the balance
             result = trader.execute_decision(decision)
             assert result is None
 
 
 # =====================================================
-# PaperTrader: cierre
+# PaperTrader: closing
 # =====================================================
 
 
@@ -230,7 +230,7 @@ class TestClosePosition:
         decision = make_open_decision(entry_price=0.40, size_eur=20.0)
         position = trader.execute_decision(decision)
         balance_after_open = trader.balance_eur
-        # Precio sube a 0.55 → ganancia ~37%
+        # Price rises to 0.55 → ~37% gain
         closed = trader.close_position(
             position.trade_id,
             current_market_price=0.55,
@@ -240,14 +240,14 @@ class TestClosePosition:
         assert closed.status == TradeStatus.CLOSED
         assert closed.pnl_eur > 0
         assert closed.close_reason == CloseReason.TAKE_PROFIT
-        assert trader.balance_eur > balance_after_open + 20.0  # devuelve principal + ganancia
+        assert trader.balance_eur > balance_after_open + 20.0  # returns principal + gain
         assert trader.num_open_positions == 0
 
     def test_cierre_con_perdida(self, trader):
         decision = make_open_decision(entry_price=0.40, size_eur=20.0)
         position = trader.execute_decision(decision)
         balance_after_open = trader.balance_eur
-        # Precio cae a 0.30 → pérdida ~25%
+        # Price falls to 0.30 → ~25% loss
         closed = trader.close_position(
             position.trade_id,
             current_market_price=0.30,
@@ -255,13 +255,13 @@ class TestClosePosition:
         )
         assert closed.pnl_eur < 0
         assert closed.close_reason == CloseReason.STOP_LOSS
-        # Recupera principal menos pérdida
+        # Recovers principal minus loss
         assert trader.balance_eur < balance_after_open + 20.0
-        assert trader.balance_eur > balance_after_open  # pero algo recupera
+        assert trader.balance_eur > balance_after_open  # but recovers something
 
     def test_close_inexistente_retorna_none(self, trader):
         result = trader.close_position(
-            "trade-id-fantasma",
+            "ghost-trade-id",
             current_market_price=0.50,
             reason=CloseReason.MANUAL,
         )
@@ -270,15 +270,15 @@ class TestClosePosition:
     def test_close_aplica_slippage_adverso(self, trader):
         decision = make_open_decision(entry_price=0.40, size_eur=20.0)
         position = trader.execute_decision(decision)
-        # Cerramos al mismo precio de mercado: el efectivo debe ser MENOR
-        # (vendes más barato por slippage)
+        # Closing at the same market price: the effective price must be LOWER
+        # (you sell cheaper due to slippage)
         closed = trader.close_position(
             position.trade_id,
             current_market_price=0.40,
             reason=CloseReason.MANUAL,
         )
-        # El P&L debe ser negativo por slippage de ambos lados aunque
-        # entry y exit "de mercado" sean iguales
+        # P&L must be negative due to slippage on both sides even though
+        # entry and exit "market" prices are equal
         assert closed.pnl_eur < 0
 
 
@@ -301,20 +301,20 @@ class TestCloseAllPositions:
     def test_omite_si_no_hay_precio(self, trader):
         d1 = make_open_decision(token_id="0xa")
         p1 = trader.execute_decision(d1)
-        # No proporcionamos precio para p1
-        closed = trader.close_all_positions({"otro_token": 0.50})
+        # We don't provide a price for p1
+        closed = trader.close_all_positions({"other_token": 0.50})
         assert len(closed) == 0
         assert trader.num_open_positions == 1
 
 
 # =====================================================
-# Restauración tras reinicio
+# Restoration after restart
 # =====================================================
 
 
 class TestRestoration:
     def test_recupera_posiciones_abiertas_de_db(self, config, risk_manager, db_path):
-        # Primera instancia: abre 2 posiciones
+        # First instance: opens 2 positions
         db1 = Database(db_path)
         t1 = PaperTrader(config, risk_manager, db=db1)
         t1.execute_decision(make_open_decision(token_id="0x1"))
@@ -322,24 +322,24 @@ class TestRestoration:
         balance_before_reset = t1.balance_eur
         db1.close()
 
-        # Segunda instancia con el MISMO db_path: debe restaurar
+        # Second instance with the SAME db_path: should restore
         rm2 = RiskManager(config, 150.0)
         db2 = Database(db_path)
         t2 = PaperTrader(config, rm2, db=db2)
 
         assert t2.num_open_positions == 2
-        # Balance restaurado del último snapshot
+        # Balance restored from the last snapshot
         assert t2.balance_eur == pytest.approx(balance_before_reset, abs=0.01)
 
 
 # =====================================================
-# Integración con DecisionEngine
+# Integration with DecisionEngine
 # =====================================================
 
 
 class TestIntegrationWithDecisionEngine:
     def test_pipeline_decision_a_position(self, config, risk_manager, db_path):
-        """Encadena: TradeDecision → execute_decision → Position en DB."""
+        """Chains: TradeDecision → execute_decision → Position in DB."""
         from src.models import (
             MarketAnalysis,
             Timeframe,
@@ -350,7 +350,7 @@ class TestIntegrationWithDecisionEngine:
         engine = DecisionEngine(config, risk_manager)
         trader = PaperTrader(config, risk_manager, db=db)
 
-        # MarketAnalysis con recomendación clara
+        # MarketAnalysis with a clear recommendation
         analysis = MarketAnalysis(
             market_id="m1",
             market_question="Will X happen?",
@@ -376,7 +376,7 @@ class TestIntegrationWithDecisionEngine:
             published_at=datetime.now(timezone.utc),
         )
 
-        # Decisión
+        # Decision
         decision = engine.decide(
             analysis,
             current_balance_eur=trader.balance_eur,
@@ -385,12 +385,12 @@ class TestIntegrationWithDecisionEngine:
         )
         assert decision.action == DecisionAction.OPEN_TRADE
 
-        # Ejecución
+        # Execution
         position = trader.execute_decision(decision)
         assert position is not None
         assert position.side == TradeSide.BUY_YES
 
-        # Verificar que está en la DB
+        # Verify it is in the DB
         all_trades = db.get_all_trades()
         assert len(all_trades) == 1
         assert all_trades[0].trade_id == position.trade_id

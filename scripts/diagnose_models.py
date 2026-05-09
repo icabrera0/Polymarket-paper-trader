@@ -1,16 +1,16 @@
 """
-Diagnóstico del problema 'NewsSource has no attribute TELEGRAM'.
+Diagnosis for the 'NewsSource has no attribute TELEGRAM' problem.
 
-Si los tests fallan diciendo que TELEGRAM no existe pero tu archivo
-src/models.py SÍ lo contiene, es porque Python está cargando una versión
-cacheada o un archivo en otra ruta.
+If tests fail saying TELEGRAM doesn't exist but your
+src/models.py file DOES contain it, it's because Python is loading a cached
+version or a file at a different path.
 
-Este script muestra:
-1. Desde qué archivo se está cargando NewsSource.
-2. Qué miembros tiene en realidad.
-3. Si hay archivos .pyc obsoletos que limpiar.
+This script shows:
+1. Which file NewsSource is being loaded from.
+2. What members it actually has.
+3. Whether there are stale .pyc files to clean up.
 
-Ejecutar:
+Run:
     python scripts/diagnose_models.py
 """
 
@@ -26,70 +26,70 @@ if str(PROJECT_ROOT) not in sys.path:
 
 def main() -> None:
     print("─" * 70)
-    print("DIAGNÓSTICO DE src/models.py")
+    print("DIAGNOSIS OF src/models.py")
     print("─" * 70)
 
-    # 1) ¿Qué hay en disco?
+    # 1) What is on disk?
     models_path = PROJECT_ROOT / "src" / "models.py"
-    print(f"\n[1] Archivo en disco: {models_path}")
-    print(f"    Existe: {models_path.exists()}")
+    print(f"\n[1] File on disk: {models_path}")
+    print(f"    Exists: {models_path.exists()}")
     if models_path.exists():
         text = models_path.read_text(encoding="utf-8")
         has_telegram_text = 'TELEGRAM = "TELEGRAM"' in text
-        print(f"    Contiene 'TELEGRAM = \"TELEGRAM\"': {has_telegram_text}")
+        print(f"    Contains 'TELEGRAM = \"TELEGRAM\"': {has_telegram_text}")
         if not has_telegram_text:
-            print("    ⚠ El archivo NO tiene la constante TELEGRAM.")
-            print("      Asegúrate de copiar la versión nueva de models.py.")
+            print("    ⚠ The file does NOT have the TELEGRAM constant.")
+            print("      Make sure to copy the new version of models.py.")
 
-    # 2) ¿Qué carga Python?
-    print("\n[2] Importando NewsSource desde src.models...")
+    # 2) What does Python load?
+    print("\n[2] Importing NewsSource from src.models...")
     try:
         from src.models import NewsSource
         import src.models as models_module
 
         loaded_from = getattr(models_module, "__file__", "?")
-        print(f"    Cargado desde: {loaded_from}")
+        print(f"    Loaded from: {loaded_from}")
 
         members = list(NewsSource)
-        print(f"    Miembros: {members}")
+        print(f"    Members: {members}")
         has_telegram_runtime = hasattr(NewsSource, "TELEGRAM")
-        print(f"    Tiene TELEGRAM en runtime: {has_telegram_runtime}")
+        print(f"    Has TELEGRAM at runtime: {has_telegram_runtime}")
 
         if not has_telegram_runtime:
-            print("\n    ⚠ El archivo en disco y lo que Python carga DIFIEREN.")
-            print("      Causas habituales:")
-            print("      a) Caché .pyc obsoleta → borra src/__pycache__")
-            print("      b) Hay dos copies de models.py en distintas rutas")
-            print("      c) El editor no guardó el cambio")
+            print("\n    ⚠ The file on disk and what Python loads DIFFER.")
+            print("      Common causes:")
+            print("      a) Stale .pyc cache → delete src/__pycache__")
+            print("      b) There are two copies of models.py at different paths")
+            print("      c) The editor did not save the change")
 
     except Exception as exc:
-        print(f"    ✗ Error importando: {exc}")
+        print(f"    ✗ Error importing: {exc}")
         return
 
-    # 3) ¿Hay caches sospechosos?
-    print("\n[3] Buscando archivos .pyc del módulo models...")
+    # 3) Are there suspicious caches?
+    print("\n[3] Searching for .pyc files of the models module...")
     pyc_files = list(PROJECT_ROOT.rglob("models.cpython-*.pyc"))
     if pyc_files:
         for pyc in pyc_files:
-            print(f"    Encontrado: {pyc}")
-        print("\n    Para limpiar todos los caches:")
+            print(f"    Found: {pyc}")
+        print("\n    To clean all caches:")
         print("    rmdir /s /q src\\__pycache__")
         print("    rmdir /s /q tests\\__pycache__")
     else:
-        print("    Sin caches sospechosos.")
+        print("    No suspicious caches.")
 
-    # 4) Buscar otros models.py en el proyecto
-    print("\n[4] Buscando OTROS archivos models.py en el proyecto...")
+    # 4) Search for other models.py in the project
+    print("\n[4] Searching for OTHER models.py files in the project...")
     other_models = [
         p for p in PROJECT_ROOT.rglob("models.py")
         if "venv" not in str(p) and ".pytest_cache" not in str(p)
     ]
     if len(other_models) > 1:
-        print(f"    ⚠ Hay {len(other_models)} archivos models.py:")
+        print(f"    ⚠ There are {len(other_models)} models.py files:")
         for p in other_models:
             print(f"      {p}")
     else:
-        print(f"    Solo hay uno: {other_models[0] if other_models else '(ninguno)'}")
+        print(f"    Only one found: {other_models[0] if other_models else '(none)'}")
 
     print("\n" + "─" * 70)
 

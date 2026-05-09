@@ -1,26 +1,25 @@
 """
-Decision Engine — el último filtro antes del paper trader.
+Decision Engine — the last filter before the paper trader.
 
-Recibe un `MarketAnalysis` (output del SENTIMENT_ANALYZER) + balance + posiciones
-abiertas, y produce un `TradeDecision` concreto:
-- abrir un trade (con lado, tamaño, stop loss y take profit calculados), O
-- NO_TRADE con razón clara para el log.
+Receives a `MarketAnalysis` (output of the SENTIMENT_ANALYZER) + balance + open
+positions, and produces a concrete `TradeDecision`:
+- open a trade (with side, size, stop loss and take profit calculated), OR
+- NO_TRADE with a clear reason for the log.
 
-También evalúa periódicamente las posiciones abiertas y decide si hay que
-cerrarlas:
-- por stop loss / take profit (delegado al RiskManager)
-- por noticia contradictoria nueva con alta confianza
-- por resolución del mercado (cuando se implemente)
+Also periodically evaluates open positions and decides whether to close them:
+- by stop loss / take profit (delegated to RiskManager)
+- by a new contradictory news article with high confidence
+- by market resolution (when implemented)
 
-Diseño:
-- Stateless en lo posible. El estado lo guarda el RiskManager (drawdown, pausa).
-- Encadena 4 capas de validación antes de decir OPEN_TRADE:
-   1. Recomendación del LLM debe ser COMPRAR_YES o COMPRAR_NO.
-   2. No abrir si ya hay posición en el mismo mercado y mismo lado.
-   3. Cancelar si ya hay posición en el LADO OPUESTO (sería contradictoria).
-   4. RiskManager.validate_new_trade() final.
-- Sizing dinámico: el tamaño base es el máximo del RiskManager, recortado
-  por (confianza × |edge|). Más confianza y más edge → más cerca del máximo.
+Design:
+- Stateless where possible. State is held by the RiskManager (drawdown, pause).
+- Chains 4 validation layers before saying OPEN_TRADE:
+   1. LLM recommendation must be COMPRAR_YES or COMPRAR_NO.
+   2. Do not open if there is already a position on the same market and same side.
+   3. Cancel if there is already a position on the OPPOSITE side (would be contradictory).
+   4. Final RiskManager.validate_new_trade().
+- Dynamic sizing: the base size is the RiskManager maximum, scaled down
+  by (confidence × |edge|). Higher confidence and higher edge → closer to the maximum.
 """
 
 from __future__ import annotations
@@ -44,21 +43,21 @@ from src.models import (
 from src.risk_manager import RiskManager
 
 
-# Confidence mínima para abrir trade. Es independiente del threshold del LLM
-# (que ya lo aplica el SENTIMENT_ANALYZER). Esta es una segunda línea de defensa.
+# Minimum confidence to open a trade. Independent of the LLM threshold
+# (which is already applied by the SENTIMENT_ANALYZER). This is a second line of defense.
 MIN_CONFIDENCE_TO_OPEN = 60
 
-# Edge mínimo absoluto para abrir trade.
+# Minimum absolute edge to open a trade.
 MIN_EDGE_TO_OPEN = 0.05
 
-# Para dimensionar la posición usamos un "factor de confianza" que va de 0 a 1.
-# Si el LLM devuelve confidence=100 y |edge|>=0.30, el factor es 1.0 → tamaño máximo.
-# Si confidence=60 y |edge|=0.05, el factor es bajo → tamaño cerca del mínimo.
+# To size the position we use a "confidence factor" that ranges from 0 to 1.
+# If the LLM returns confidence=100 and |edge|>=0.30, the factor is 1.0 → maximum size.
+# If confidence=60 and |edge|=0.05, the factor is low → size near the minimum.
 EDGE_REFERENCE_FOR_FULL_SIZE = 0.30
 
 
 class DecisionEngine:
-    """Convierte análisis del LLM en decisiones de trading concretas."""
+    """Converts LLM analysis into concrete trading decisions."""
 
     def __init__(
         self,
@@ -69,13 +68,13 @@ class DecisionEngine:
         self.risk_manager = risk_manager
         self._log = logger.bind(module="decision_engine")
         self._log.info(
-            "DecisionEngine inicializado: min_confidence={}, min_edge={}",
+            "DecisionEngine initialized: min_confidence={}, min_edge={}",
             MIN_CONFIDENCE_TO_OPEN,
             MIN_EDGE_TO_OPEN,
         )
 
     # =====================================================
-    # Decisión de apertura
+    # Opening decision
     # =====================================================
 
     def decide(
@@ -85,30 +84,30 @@ class DecisionEngine:
         open_positions: list[Position],
         articles: Optional[list[NewsArticle]] = None,
     ) -> TradeDecision:
-        """Decide si abrir un trade dado el análisis y el estado actual.
+        """Decides whether to open a trade given the analysis and current state.
 
         Args:
-            analysis: el output del SENTIMENT_ANALYZER.
-            current_balance_eur: balance disponible actual.
-            open_positions: lista de posiciones abiertas (de cualquier mercado).
-            articles: noticias asociadas (opcional, para require_news_for_entry).
+            analysis: the output of the SENTIMENT_ANALYZER.
+            current_balance_eur: current available balance.
+            open_positions: list of open positions (from any market).
+            articles: associated news articles (optional, for require_news_for_entry).
         """
         skip_reasons: list[SkipReason] = []
         rationale_parts: list[str] = []
 
-        # 1) Filtro: el LLM tiene que recomendar comprar
+        # 1) Filter: the LLM must recommend buying
         if analysis.recommendation == TradeRecommendation.INSUFFICIENT_DATA:
             skip_reasons.append(SkipReason.LLM_INSUFFICIENT_DATA)
-            rationale_parts.append("El LLM no tiene datos suficientes")
+            rationale_parts.append("The LLM does not have enough data")
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
         if analysis.recommendation == TradeRecommendation.ESPERAR:
             skip_reasons.append(SkipReason.LLM_RECOMMENDS_WAIT)
-            rationale_parts.append("El LLM recomienda esperar")
+            rationale_parts.append("The LLM recommends waiting")
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 2) Filtro: confianza y edge mínimos (segunda línea de defensa).
-        #    Si el análisis es low_info, exigimos un threshold más alto.
+        # 2) Filter: minimum confidence and edge (second line of defense).
+        #    If the analysis is low_info, a higher threshold is required.
         cfg_dec = self.config.decision
         effective_min_confidence = (
             cfg_dec.low_info_min_confidence
@@ -119,50 +118,50 @@ class DecisionEngine:
             skip_reasons.append(SkipReason.LLM_RECOMMENDS_WAIT)
             mode = "low_info" if analysis.is_low_info else "normal"
             rationale_parts.append(
-                f"Confianza {analysis.confidence} < umbral {effective_min_confidence} "
-                f"(modo {mode})"
+                f"Confidence {analysis.confidence} < threshold {effective_min_confidence} "
+                f"(mode {mode})"
             )
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
         if abs(analysis.edge) < MIN_EDGE_TO_OPEN:
             skip_reasons.append(SkipReason.LLM_RECOMMENDS_WAIT)
             rationale_parts.append(
-                f"|Edge| {abs(analysis.edge):.3f} < umbral {MIN_EDGE_TO_OPEN}"
+                f"|Edge| {abs(analysis.edge):.3f} < threshold {MIN_EDGE_TO_OPEN}"
             )
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 3) Filtro: requerir noticias si el config lo exige.
-        #    En modo low_info este filtro se relaja (basta con 1 noticia).
+        # 3) Filter: require news if config demands it.
+        #    In low_info mode this filter is relaxed (1 article is enough).
         if self.config.decision.require_news_for_entry and not analysis.is_low_info:
             if not articles or len(articles) == 0:
                 skip_reasons.append(SkipReason.REQUIRE_NEWS_BUT_NONE)
                 rationale_parts.append(
-                    "Config exige noticias para abrir, pero no se aportaron"
+                    "Config requires news to open, but none were provided"
                 )
                 return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 4) Determinar lado del trade
+        # 4) Determine trade side
         side, token_id, entry_price = self._resolve_side_and_token(analysis)
 
-        # 5) Anti-duplicación: ya hay posición abierta en este mercado?
+        # 5) Anti-duplication: is there already an open position in this market?
         for pos in open_positions:
             if pos.token_id != token_id and self._same_market(pos, analysis):
-                # Misma pregunta pero lado opuesto → posición contradictoria
+                # Same question but opposite side → contradictory position
                 skip_reasons.append(SkipReason.OPPOSITE_OPEN_POSITION)
                 rationale_parts.append(
-                    f"Ya hay posición abierta en el lado opuesto del mercado "
+                    f"There is already an open position on the opposite side of the market "
                     f"({pos.trade_id[:8]})"
                 )
                 return self._no_trade(analysis, skip_reasons, rationale_parts)
             if pos.token_id == token_id:
                 skip_reasons.append(SkipReason.DUPLICATE_OPEN_POSITION)
                 rationale_parts.append(
-                    f"Ya hay posición abierta en este token "
+                    f"There is already an open position on this token "
                     f"({pos.trade_id[:8]})"
                 )
                 return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 6) Sizing dinámico (con reducción si es low_info)
+        # 6) Dynamic sizing (with reduction if low_info)
         proposed_size_eur = self._calculate_position_size(
             current_balance_eur=current_balance_eur,
             confidence=analysis.confidence,
@@ -170,7 +169,7 @@ class DecisionEngine:
             is_low_info=analysis.is_low_info,
         )
 
-        # 7) Validación final del RiskManager
+        # 7) Final RiskManager validation
         risk_check = self.risk_manager.validate_new_trade(
             proposed_size_eur=proposed_size_eur,
             current_balance_eur=current_balance_eur,
@@ -180,27 +179,27 @@ class DecisionEngine:
         if not risk_check.approved:
             skip_reasons.append(SkipReason.RISK_MANAGER_REJECTED)
             rationale_parts.append(
-                f"RiskManager rechazó: {[r.value for r in risk_check.rejection_reasons]}"
+                f"RiskManager rejected: {[r.value for r in risk_check.rejection_reasons]}"
             )
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # Aplicar el ajuste si lo hubo
+        # Apply the adjustment if one was made
         final_size = (
             risk_check.adjusted_size_eur
             if risk_check.adjusted_size_eur is not None
             else proposed_size_eur
         )
 
-        # Comprobar que tras el ajuste sigue por encima del mínimo
+        # Check that after adjustment it is still above the minimum
         if final_size < self.risk_manager.risk.min_trade_size_eur:
             skip_reasons.append(SkipReason.SIZE_BELOW_MIN_AFTER_SIZING)
             rationale_parts.append(
-                f"Tamaño tras ajustes ({final_size:.2f}€) < mínimo "
+                f"Size after adjustments ({final_size:.2f}€) < minimum "
                 f"({self.risk_manager.risk.min_trade_size_eur}€)"
             )
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 8) ¡Aprobado! Calcular niveles
+        # 8) Approved! Calculate levels
         sl = self.risk_manager.calculate_stop_loss_price(entry_price)
         tp = self.risk_manager.calculate_take_profit_price(entry_price)
 
@@ -231,7 +230,7 @@ class DecisionEngine:
         )
 
     # =====================================================
-    # Reevaluación de posiciones abiertas
+    # Open position re-evaluation
     # =====================================================
 
     def evaluate_open_position(
@@ -240,21 +239,21 @@ class DecisionEngine:
         current_price: float,
         new_analysis: Optional[MarketAnalysis] = None,
     ) -> CloseDecision:
-        """Decide si cerrar una posición abierta.
+        """Decides whether to close an open position.
 
-        Combina:
-        1. Stop loss / take profit por precio (delegado al RiskManager).
-        2. Reversal por nueva noticia: si el LLM ahora recomienda lo contrario
-           con confianza > 70%, cierra la posición.
+        Combines:
+        1. Stop loss / take profit by price (delegated to RiskManager).
+        2. Reversal by new news: if the LLM now recommends the opposite
+           with confidence > 70%, close the position.
         """
-        # 1) Chequeo del RiskManager
+        # 1) RiskManager check
         rm_decision = self.risk_manager.should_close_position(position, current_price)
         if rm_decision.should_close:
             return rm_decision
 
-        # 2) Reversal por noticia
+        # 2) News reversal
         if new_analysis is None:
-            return rm_decision  # No hay nueva info, mantener
+            return rm_decision  # No new info, hold
 
         if new_analysis.confidence < 70:
             return rm_decision
@@ -268,7 +267,7 @@ class DecisionEngine:
             from src.models import CloseReason
 
             self._log.info(
-                "CIERRE por reversal de noticias | trade={} new_rec={} confidence={}",
+                "CLOSE due to news reversal | trade={} new_rec={} confidence={}",
                 position.trade_id[:8],
                 new_analysis.recommendation.value,
                 new_analysis.confidence,
@@ -280,8 +279,8 @@ class DecisionEngine:
                 pnl_pct=pnl_pct,
                 pnl_eur=position.current_pnl_eur(current_price),
                 notes=(
-                    f"Reversal: nuevo análisis recomienda "
-                    f"{new_analysis.recommendation.value} con confianza "
+                    f"Reversal: new analysis recommends "
+                    f"{new_analysis.recommendation.value} with confidence "
                     f"{new_analysis.confidence}/100"
                 ),
             )
@@ -295,7 +294,7 @@ class DecisionEngine:
     def _resolve_side_and_token(
         self, analysis: MarketAnalysis
     ) -> tuple[TradeSide, str, float]:
-        """Devuelve (side, token_id, entry_price) según la recomendación."""
+        """Returns (side, token_id, entry_price) based on the recommendation."""
         if analysis.recommendation == TradeRecommendation.COMPRAR_YES:
             return (
                 TradeSide.BUY_YES,
@@ -308,9 +307,9 @@ class DecisionEngine:
                 analysis.no_token_id,
                 analysis.current_no_price,
             )
-        # Defensivo: no debería llegar aquí porque el chequeo previo lo descarta
+        # Defensive: should not reach here because the prior check discards it
         raise ValueError(
-            f"_resolve_side_and_token llamado con recomendación inválida: "
+            f"_resolve_side_and_token called with invalid recommendation: "
             f"{analysis.recommendation}"
         )
 
@@ -321,30 +320,30 @@ class DecisionEngine:
         edge: float,
         is_low_info: bool = False,
     ) -> float:
-        """Tamaño dinámico: factor (confianza × edge) sobre el máximo permitido.
+        """Dynamic sizing: (confidence × edge) factor applied to the maximum allowed.
 
-        Si is_low_info=True, aplica el multiplicador de config.decision para
-        recortar el tamaño aún más (típicamente 50%).
+        If is_low_info=True, applies the multiplier from config.decision to
+        further reduce the size (typically 50%).
 
-        Garantiza siempre como mínimo el tamaño mínimo de trade del RiskManager.
-        Como máximo, el tamaño máximo permitido por posición.
+        Always guarantees at least the RiskManager's minimum trade size.
+        At most, the maximum allowed position size.
         """
         max_size = self.risk_manager.calculate_max_position_size(current_balance_eur)
         min_size = self.risk_manager.risk.min_trade_size_eur
 
-        # Factor de confianza: 0 cuando confidence=0, 1 cuando confidence=100
+        # Confidence factor: 0 when confidence=0, 1 when confidence=100
         confidence_factor = confidence / 100.0
-        # Factor de edge: 0 cuando edge=0, 1 cuando |edge| >= EDGE_REFERENCE
+        # Edge factor: 0 when edge=0, 1 when |edge| >= EDGE_REFERENCE
         edge_factor = min(1.0, abs(edge) / EDGE_REFERENCE_FOR_FULL_SIZE)
-        # Combinación: producto. Si cualquiera es bajo, el tamaño cae mucho.
+        # Combination: product. If either is low, the size drops significantly.
         sizing_factor = confidence_factor * edge_factor
 
-        # Reducción adicional por modo low_info
+        # Additional reduction for low_info mode
         if is_low_info:
             low_info_mult = self.config.decision.low_info_size_multiplier
             sizing_factor *= low_info_mult
             self._log.debug(
-                "Sizing low_info: aplicando multiplier {:.2f}", low_info_mult
+                "Sizing low_info: applying multiplier {:.2f}", low_info_mult
             )
 
         proposed = max_size * sizing_factor
@@ -352,9 +351,8 @@ class DecisionEngine:
 
     @staticmethod
     def _same_market(position: Position, analysis: MarketAnalysis) -> bool:
-        """Heurística: comparamos por market_question. El market_id estable de
-        Polymarket podríamos almacenarlo en Position en el futuro para mayor
-        robustez."""
+        """Heuristic: compare by market_question. The stable Polymarket market_id
+        could be stored in Position in the future for greater robustness."""
         return position.market_question == analysis.market_question
 
     def _no_trade(
@@ -363,7 +361,7 @@ class DecisionEngine:
         skip_reasons: list[SkipReason],
         rationale_parts: list[str],
     ) -> TradeDecision:
-        rationale = " | ".join(rationale_parts) if rationale_parts else "(sin razón)"
+        rationale = " | ".join(rationale_parts) if rationale_parts else "(no reason)"
         self._log.debug(
             "NO_TRADE | {} | {}",
             analysis.market_question[:60],

@@ -1,22 +1,22 @@
 """
-Orchestrator — el director de orquesta del bot.
+Orchestrator — the conductor of the bot.
 
-Conecta todos los módulos en un pipeline y los planifica con APScheduler:
+Connects all modules in a pipeline and schedules them with APScheduler:
 
-  Cada 5 min  → ciclo principal: scan → keywords → news → analyze → decide → execute
-  Cada 15 min → reevaluar posiciones abiertas con precios actualizados
-  Cada 23:55  → generar reporte Excel diario + notificación de resumen
+  Every 5 min  → main cycle: scan → keywords → news → analyze → decide → execute
+  Every 15 min → re-evaluate open positions with updated prices
+  Every 23:55  → generate daily Excel report + summary notification
 
-El Orchestrator gestiona el ciclo de vida completo:
-  - Arranque: inicializa todos los módulos, restaura estado de la DB,
-    verifica Ollama si procede, envía ping de inicio a Discord.
-  - Bucle: ejecuta los jobs planificados indefinidamente.
-  - Parada: captura Ctrl+C / SIGTERM, cierra la DB limpiamente y
-    envía notificación de apagado.
+The Orchestrator manages the full lifecycle:
+  - Startup: initializes all modules, restores state from the DB,
+    verifies Ollama if applicable, sends startup ping to Discord.
+  - Loop: executes scheduled jobs indefinitely.
+  - Shutdown: captures Ctrl+C / SIGTERM, closes the DB cleanly and
+    sends a shutdown notification.
 
-Filosofía de errores:
-  - Los errores dentro de un job se loguean pero NO paran el bot.
-  - Solo un error CRÍTICO en el arranque puede abortar.
+Error philosophy:
+  - Errors inside a job are logged but do NOT stop the bot.
+  - Only a CRITICAL error at startup can abort.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from src.sentiment_analyzer import SentimentAnalyzer
 
 
 # =====================================================
-# Keyword extractor (mismo que el script live)
+# Keyword extractor (same as the live script)
 # =====================================================
 
 
@@ -95,7 +95,7 @@ def extract_keywords(question: str, max_kw: int = 4) -> list[str]:
 
 
 class Orchestrator:
-    """Coordina todos los módulos y planifica los jobs."""
+    """Coordinates all modules and schedules jobs."""
 
     def __init__(self, config: BotConfig) -> None:
         self.config = config
@@ -118,7 +118,7 @@ class Orchestrator:
         # intermediate Gamma responses, only cleared on successful close.
         self._zombie_since: dict[str, float] = {}
 
-        # --- Módulos ---
+        # --- Modules ---
         self.clob_client = ClobApiClient()
         self.db = Database(config.database.path)
         self.risk_manager = RiskManager(config)
@@ -134,51 +134,51 @@ class Orchestrator:
         self._sports_trade_ids: set[str] = set()
 
         self._log.info(
-            "Orchestrator inicializado. Balance: €{:.2f}, "
-            "Posiciones abiertas: {}",
+            "Orchestrator initialized. Balance: €{:.2f}, "
+            "Open positions: {}",
             self.paper_trader.balance_eur,
             self.paper_trader.num_open_positions,
         )
 
     # =====================================================
-    # Ciclo de vida
+    # Lifecycle
     # =====================================================
 
     def start(self) -> None:
-        """Arranca el bot y bloquea hasta que se detenga."""
+        """Starts the bot and blocks until it is stopped."""
         self._log.info("=" * 60)
-        self._log.info("  POLYMARKET PAPER TRADING BOT — ARRANCANDO")
+        self._log.info("  POLYMARKET PAPER TRADING BOT — STARTING UP")
         self._log.info("=" * 60)
 
-        # Verificar Ollama si aplica
+        # Verify Ollama if applicable
         if self.config.llm.provider == "ollama":
             from src.llm_client import OllamaClient, OllamaUnavailable
             try:
                 OllamaClient(self.config).verify_setup()
             except OllamaUnavailable as exc:
-                self._log.error("Ollama no disponible: {}", exc)
+                self._log.error("Ollama not available: {}", exc)
                 self._log.error(
-                    "Ejecuta 'ollama serve' y asegúrate de que el modelo "
-                    "está descargado. Abortando."
+                    "Run 'ollama serve' and make sure the model "
+                    "is downloaded. Aborting."
                 )
                 sys.exit(1)
 
-        # Notificar arranque
+        # Notify startup
         self.notifications.send_text(
-            f"🤖 **Bot arrancado** | Balance: €{self.paper_trader.balance_eur:.2f} "
-            f"| Posiciones abiertas: {self.paper_trader.num_open_positions}"
+            f"🤖 **Bot started** | Balance: €{self.paper_trader.balance_eur:.2f} "
+            f"| Open positions: {self.paper_trader.num_open_positions}"
         )
 
-        # Registrar handlers de señal para parada limpia
+        # Register signal handlers for clean shutdown
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
-        # Planificar jobs
+        # Schedule jobs
         self._scheduler = BackgroundScheduler(
             timezone=self.config.app.timezone
         )
 
-        # Job 1: Ciclo principal (cada N segundos)
+        # Job 1: Main cycle (every N seconds)
         self._scheduler.add_job(
             self._run_main_cycle,
             trigger=IntervalTrigger(
@@ -190,7 +190,7 @@ class Orchestrator:
             misfire_grace_time=60,
         )
 
-        # Job 2: Reevaluar posiciones (cada 15 min)
+        # Job 2: Re-evaluate positions (every 15 min)
         self._scheduler.add_job(
             self._run_position_review,
             trigger=IntervalTrigger(
@@ -202,7 +202,7 @@ class Orchestrator:
             misfire_grace_time=120,
         )
 
-        # Job 3: Reporte diario (hora configurada en settings.yaml)
+        # Job 3: Daily report (time configured in settings.yaml)
         report_time = self.config.reports.generation_time  # "23:55"
         h, m = report_time.split(":")
         self._scheduler.add_job(
@@ -226,18 +226,18 @@ class Orchestrator:
         _pm_thread.start()
 
         self._log.info(
-            "Scheduler iniciado. Ciclo cada {}s, revisión cada {}min, "
-            "monitor SL/TP cada 10s, reporte a las {}",
+            "Scheduler started. Cycle every {}s, review every {}min, "
+            "SL/TP monitor every 10s, report at {}",
             self.config.polymarket.scan_interval_seconds,
             self.config.decision.reevaluate_open_positions_minutes,
             report_time,
         )
 
-        # Ejecutar el primer ciclo inmediatamente sin esperar el intervalo
-        self._log.info("Ejecutando ciclo inicial...")
+        # Run the first cycle immediately without waiting for the interval
+        self._log.info("Running initial cycle...")
         self._run_main_cycle()
 
-        # Bloquear en el hilo principal
+        # Block on the main thread
         try:
             while self._running:
                 if _HOT_RELOAD_FLAG.exists():
@@ -247,7 +247,7 @@ class Orchestrator:
             self._shutdown()
 
     def _handle_shutdown(self, signum, frame) -> None:
-        self._log.info("Señal de parada recibida ({}). Deteniendo bot...", signum)
+        self._log.info("Shutdown signal received ({}). Stopping bot...", signum)
         self._shutdown()
 
     def _shutdown(self) -> None:
@@ -256,16 +256,16 @@ class Orchestrator:
         if self._scheduler and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
         self.notifications.send_text(
-            f"🛑 **Bot detenido** | Balance final: €{self.paper_trader.balance_eur:.2f}"
+            f"🛑 **Bot stopped** | Final balance: €{self.paper_trader.balance_eur:.2f}"
         )
         self.db.close()
-        self._log.info("Bot detenido limpiamente.")
+        self._log.info("Bot stopped cleanly.")
         sys.exit(0)
 
     def _hot_reload(self) -> None:
         """Graceful restart triggered by dev_runner.py writing hot_reload.flag."""
         _HOT_RELOAD_FLAG.unlink(missing_ok=True)
-        self._log.info("Hot reload solicitado — reiniciando con nuevo código...")
+        self._log.info("Hot reload requested — restarting with new code...")
         self._running = False
         self._price_monitor_running = False
         if self._scheduler and self._scheduler.running:
@@ -305,38 +305,38 @@ class Orchestrator:
                 self.config.llm.llm_parallelism = new_par
 
         except Exception as exc:
-            self._log.warning("Error leyendo overrides del dashboard: {}", exc)
+            self._log.warning("Error reading dashboard overrides: {}", exc)
 
     def _run_main_cycle(self) -> None:
-        """Ciclo principal: scan → news → analyze → decide → execute."""
+        """Main cycle: scan → news → analyze → decide → execute."""
         if not self._cycle_lock.acquire(blocking=False):
             self._log.warning(
-                "Ciclo anterior aún en ejecución — saltando disparo del scheduler"
+                "Previous cycle still running — skipping scheduler trigger"
             )
             return
         try:
             self._apply_overrides()
             self._log.info(
-                "--- Ciclo principal | balance=€{:.2f} | posiciones={}",
+                "--- Main cycle | balance=€{:.2f} | positions={}",
                 self.paper_trader.balance_eur,
                 self.paper_trader.num_open_positions,
             )
 
-            # 1) Comprobar si el bot está pausado
+            # 1) Check if the bot is paused
             if self.risk_manager.is_paused:
                 self._log.warning(
-                    "Bot pausado por drawdown. Saltando ciclo. "
-                    "Usa 'python scripts/manage_balance.py status' para revisar."
+                    "Bot paused due to drawdown. Skipping cycle. "
+                    "Use 'python scripts/manage_balance.py status' to review."
                 )
                 return
 
-            # 2) Escanear mercados
+            # 2) Scan markets
             markets = self.market_scanner.scan()
             if not markets:
-                self._log.info("No hay mercados operables en este ciclo.")
+                self._log.info("No tradeable markets in this cycle.")
                 return
 
-            # 3) Re-ranking por categoría y selección de candidatos
+            # 3) Re-ranking by category and candidate selection
             candidates = self.market_scanner.rank_for_analysis(
                 markets,
                 category_boost=self.config.decision.category_priority_boost,
@@ -357,7 +357,7 @@ class Orchestrator:
                 no_hunt = no_hunt[:self.config.decision.no_hunt_max_candidates]
                 if no_hunt:
                     self._log.info(
-                        "NO hunt: +{} mercados con YES≥{:.0%} añadidos al análisis",
+                        "NO hunt: +{} markets with YES≥{:.0%} added to analysis",
                         len(no_hunt),
                         self.config.decision.no_hunt_min_yes_price,
                     )
@@ -444,21 +444,21 @@ class Orchestrator:
                 if a and a.recommendation.value not in ("ESPERAR", "INSUFFICIENT_DATA")
             )
             self._log.info(
-                "Pipeline completado: {} mercados en {:.1f}s | {} accionables",
+                "Pipeline complete: {} markets in {:.1f}s | {} actionable",
                 len(candidates), time.time() - t_pipeline, actionable,
             )
 
             # ── Phase 3: Decide + execute (serial — position state must be consistent)
             new_trades = 0
             for (market, articles), analysis in zip(pairs, analyses):
-                # Parar si llegamos al máximo de posiciones
+                # Stop if we have reached the maximum number of positions
                 if (
                     self.paper_trader.num_open_positions
                     >= self.config.risk.max_simultaneous_positions
                 ):
                     self._log.info(
-                        "Máximo de posiciones alcanzado ({}/{}). "
-                        "Sin nuevos trades este ciclo — revisando posiciones abiertas.",
+                        "Maximum positions reached ({}/{}). "
+                        "No new trades this cycle — reviewing open positions.",
                         self.paper_trader.num_open_positions,
                         self.config.risk.max_simultaneous_positions,
                     )
@@ -486,25 +486,25 @@ class Orchestrator:
 
             if new_trades > 0:
                 self._log.info(
-                    "Ciclo completado: {} trade/s abierto/s", new_trades
+                    "Cycle complete: {} trade(s) opened", new_trades
                 )
 
-            # 5) Comprobar drawdown tras el ciclo
+            # 5) Check drawdown after the cycle
             self._check_drawdown()
 
-            # 6) Módulo deportivo secundario (solo si enabled)
+            # 6) Secondary sports module (only if enabled)
             if self.config.sports_in_play.enabled:
                 self._run_sports_cycle()
 
         except Exception as exc:
-            self._log.error("Error en ciclo principal: {}", exc, exc_info=True)
+            self._log.error("Error in main cycle: {}", exc, exc_info=True)
             self.notifications.notify_error("main_cycle", str(exc))
         finally:
             self._cycle_lock.release()
 
     def _price_monitor_loop(self) -> None:
         """Daemon thread body: polls every 10 s while the bot is running."""
-        self._log.info("Price monitor thread arrancado (intervalo 10s)")
+        self._log.info("Price monitor thread started (10s interval)")
         tick = 0
         while self._price_monitor_running and self._running:
             tick += 1
@@ -513,7 +513,7 @@ class Orchestrator:
             except Exception as exc:
                 self._log.error("Price monitor loop error: {}", exc, exc_info=True)
             time.sleep(10)
-        self._log.info("Price monitor thread detenido")
+        self._log.info("Price monitor thread stopped")
 
     def _run_price_monitor(self, tick: int = 0) -> None:
         """Lightweight SL/TP monitor — called every 10 s from the daemon thread.
@@ -526,7 +526,7 @@ class Orchestrator:
             return
 
         if not self._position_lock.acquire(blocking=False):
-            self._log.debug("Price monitor: position review en curso, saltando tick")
+            self._log.debug("Price monitor: position review in progress, skipping tick")
             return
 
         try:
@@ -571,7 +571,7 @@ class Orchestrator:
 
                 if close_decision.should_close:
                     self._log.info(
-                        "Price monitor: cerrando '{}' por {} | precio={:.4f}",
+                        "Price monitor: closing '{}' due to {} | price={:.4f}",
                         position.market_question[:40],
                         close_decision.reason,
                         current_price,
@@ -593,32 +593,32 @@ class Orchestrator:
                             )
                 else:
                     self._log.debug(
-                        "Price monitor: {} | precio={:.4f} | P&L={:+.2%}",
+                        "Price monitor: {} | price={:.4f} | P&L={:+.2%}",
                         position.trade_id[:8],
                         current_price,
                         close_decision.pnl_pct,
                     )
 
         except Exception as exc:
-            self._log.error("Error en price monitor: {}", exc, exc_info=True)
+            self._log.error("Error in price monitor: {}", exc, exc_info=True)
         finally:
             self._position_lock.release()
 
     def _run_sports_cycle(self) -> None:
-        """Módulo secundario: busca oportunidades de underdog en partidos en directo.
+        """Secondary module: looks for underdog opportunities in live matches.
 
-        Solo opera cuando sports_in_play.enabled=true. Mantiene max 1 posición
-        deportiva simultánea con tamaño fijo y prompt especializado.
+        Only operates when sports_in_play.enabled=true. Maintains max 1
+        simultaneous sports position with a fixed size and a specialized prompt.
         """
         cfg = self.config.sports_in_play
         open_ids = {p.trade_id for p in self.paper_trader.open_positions}
 
-        # Limpiar _sports_trade_ids de posiciones ya cerradas
+        # Remove from _sports_trade_ids any positions that are already closed
         self._sports_trade_ids &= open_ids
 
         if len(self._sports_trade_ids) >= cfg.max_positions:
             self._log.debug(
-                "Sports: {}/{} posiciones abiertas — saltando ciclo",
+                "Sports: {}/{} positions open — skipping cycle",
                 len(self._sports_trade_ids),
                 cfg.max_positions,
             )
@@ -639,7 +639,7 @@ class Orchestrator:
             keywords = extract_keywords(market.question)
             articles = self.news_ingestor.fetch(keywords, max_articles=8)
 
-            # Exigir al menos 1 artículo fresco (<min_fresh_news_minutes)
+            # Require at least 1 fresh article (<min_fresh_news_minutes)
             fresh = [
                 a for a in articles
                 if a.published_at
@@ -647,7 +647,7 @@ class Orchestrator:
             ]
             if not fresh:
                 self._log.debug(
-                    "Sports: '{}' — sin noticias frescas (<{}min), descartado",
+                    "Sports: '{}' — no fresh news (<{}min), discarded",
                     market.question[:40],
                     cfg.min_fresh_news_minutes,
                 )
@@ -662,12 +662,12 @@ class Orchestrator:
             ):
                 continue
 
-            # Calcular SL/TP específicos para deportes
+            # Calculate SL/TP specific to sports
             no_price = market.no_price
             sl_price = no_price * (1.0 - cfg.stop_loss_pct)
             tp_price = no_price * (1.0 + cfg.take_profit_pct)
 
-            # Clamp dentro de rango válido
+            # Clamp within valid range
             sl_price = max(0.001, min(0.999, sl_price))
             tp_price = max(0.001, min(0.999, tp_price))
 
@@ -695,7 +695,7 @@ class Orchestrator:
                 self._sports_trade_ids.add(position.trade_id)
                 slots -= 1
                 self._log.info(
-                    "SPORTS trade abierto: '{}' | NO@{:.4f} | conf={} | "
+                    "SPORTS trade opened: '{}' | NO@{:.4f} | conf={} | "
                     "SL={:.4f} TP={:.4f} | size=€{:.2f}",
                     market.question[:40],
                     no_price,
@@ -709,14 +709,13 @@ class Orchestrator:
                 )
 
     def _run_position_review(self, scanned_markets=None) -> None:
-        """Revisa posiciones abiertas y cierra las que procedan.
+        """Reviews open positions and closes those that qualify.
 
         Args:
-            scanned_markets: mercados ya escaneados en el ciclo principal.
-                Si se pasa, se reusan (sin scan adicional). Si es None
-                (job autónomo de 15 min), se hace una consulta dirigida
-                solo a los tokens de las posiciones abiertas — sin scan
-                masivo de los 500 mercados.
+            scanned_markets: markets already scanned in the main cycle.
+                If provided, they are reused (no additional scan). If None
+                (autonomous 15-min job), a targeted query is made for only
+                the tokens of open positions — no full 500-market scan.
         """
         self._position_lock.acquire()  # blocks if price monitor is mid-evaluation
         try:
@@ -725,26 +724,26 @@ class Orchestrator:
                 return
 
             self._log.info(
-                "Revisando {} posición/es abierta/s", len(positions)
+                "Reviewing {} open position(s)", len(positions)
             )
 
             if scanned_markets is not None:
-                # Llamado desde el ciclo principal: reusar mercados ya fetcheados.
+                # Called from the main cycle: reuse already-fetched markets.
                 markets: list = list(scanned_markets)
                 price_map = self._build_price_map(markets)
-                # Solo buscar los tokens que no pasaron los filtros del scan.
+                # Only fetch tokens that did not pass the scan filters.
                 tokens_to_fetch = [
                     p.token_id for p in positions if p.token_id not in price_map
                 ]
             else:
-                # Job autónomo de 15 min: consulta dirigida, sin scan masivo.
+                # Autonomous 15-min job: targeted query, no full scan.
                 markets = []
                 price_map = {}
                 tokens_to_fetch = [p.token_id for p in positions]
 
             if tokens_to_fetch:
                 self._log.debug(
-                    "CLOB midpoint lookup para {} token/s de posiciones abiertas",
+                    "CLOB midpoint lookup for {} token(s) from open positions",
                     len(tokens_to_fetch),
                 )
                 clob_prices = self.clob_client.fetch_midpoints(tokens_to_fetch)
@@ -758,14 +757,14 @@ class Orchestrator:
                         self._close_resolved_position(position, settlement)
                         continue
                     self._log.warning(
-                        "Sin precio para token {} ({}...) — usando precio de entrada "
-                        "para revisión de SL/TP",
+                        "No price for token {} ({}...) — using entry price "
+                        "for SL/TP review",
                         position.token_id[:10],
                         position.market_question[:30],
                     )
                     current_price = position.entry_price
 
-                # Obtener análisis fresco si hay noticias recientes
+                # Fetch fresh analysis if there are recent news articles
                 keywords = extract_keywords(position.market_question)
                 articles = self.news_ingestor.fetch(keywords, max_articles=5)
                 market_snap = next(
@@ -803,7 +802,7 @@ class Orchestrator:
                             )
                 else:
                     self._log.debug(
-                        "Posición {} mantenida | precio={:.4f} | P&L={:+.2%}",
+                        "Position {} held | price={:.4f} | P&L={:+.2%}",
                         position.trade_id[:8],
                         current_price,
                         close_decision.pnl_pct,
@@ -812,19 +811,19 @@ class Orchestrator:
             self._check_drawdown()
 
         except Exception as exc:
-            self._log.error("Error en revisión de posiciones: {}", exc, exc_info=True)
+            self._log.error("Error in position review: {}", exc, exc_info=True)
             self.notifications.notify_error("position_review", str(exc))
         finally:
             self._position_lock.release()
 
     def _run_daily_report(self) -> None:
-        """Genera el reporte Excel y envía resumen a Discord."""
+        """Generates the Excel report and sends a summary to Discord."""
         try:
-            self._log.info("Generando reporte diario...")
+            self._log.info("Generating daily report...")
             today = datetime.now(timezone.utc)
             report_path = self.report_generator.generate_daily_report(today)
 
-            # Calcular KPIs básicos para el resumen de Discord
+            # Calculate basic KPIs for the Discord summary
             balance_history = self.db.get_balance_history()
             from src.report_generator import ReportGenerator
             from datetime import time, timedelta
@@ -856,10 +855,10 @@ class Orchestrator:
                 win_rate=win_rate,
                 report_path=str(report_path),
             )
-            self._log.info("Reporte diario generado: {}", report_path)
+            self._log.info("Daily report generated: {}", report_path)
 
         except Exception as exc:
-            self._log.error("Error generando reporte: {}", exc, exc_info=True)
+            self._log.error("Error generating report: {}", exc, exc_info=True)
             self.notifications.notify_error("daily_report", str(exc))
 
     # =====================================================
@@ -867,7 +866,7 @@ class Orchestrator:
     # =====================================================
 
     def _build_price_map(self, markets) -> dict[str, float]:
-        """Construye {token_id: precio} para los mercados activos."""
+        """Builds {token_id: price} for active markets."""
         price_map: dict[str, float] = {}
         for m in markets:
             price_map[m.yes_token_id] = m.yes_price
@@ -875,15 +874,15 @@ class Orchestrator:
         return price_map
 
     def _check_market_resolution(self, position) -> float | None:
-        """Si el token de la posición está muerto (404), intenta resolver el mercado
-        vía Gamma API. El timer de zombie arranca en la PRIMERA detección y nunca
-        se resetea por respuestas intermedias de Gamma — evita el bug donde
-        outcomePrices en estado pendiente reiniciaba el countdown indefinidamente.
+        """If the position's token is dead (404), tries to resolve the market
+        via the Gamma API. The zombie timer starts on the FIRST detection and is
+        never reset by intermediate Gamma responses — avoids the bug where
+        outcomePrices in a pending state would restart the countdown indefinitely.
 
         Returns:
-            1.0  — lado comprado ganó
-            0.0  — lado comprado perdió
-            None — no resuelto / force-close ya gestionado internamente
+            1.0  — bought side won
+            0.0  — bought side lost
+            None — not resolved / force-close already handled internally
         """
         from src.clob_client import _DEAD_TOKENS
         if position.token_id not in _DEAD_TOKENS:
@@ -891,16 +890,16 @@ class Orchestrator:
 
         now = time.time()
 
-        # Timer de zombie: arranca en la primera detección, nunca se resetea
-        # por respuestas Gamma intermedias — solo se borra al cerrar la posición.
+        # Zombie timer: starts on first detection, never reset by intermediate
+        # Gamma responses — only cleared when the position is closed.
         zombie_since = self._zombie_since.setdefault(position.token_id, now)
         zombie_elapsed = now - zombie_since
 
         # Force-close check: runs every tick once threshold is exceeded
         if zombie_elapsed >= 600:
             self._log.warning(
-                "ZOMBIE FORCE-CLOSE: '{}' — {:.0f}min sin resolución. "
-                "Cerrando a precio de entrada.",
+                "ZOMBIE FORCE-CLOSE: '{}' — {:.0f}min without resolution. "
+                "Closing at entry price.",
                 position.market_question[:50],
                 zombie_elapsed / 60,
             )
@@ -929,21 +928,21 @@ class Orchestrator:
         )
         if raw is None:
             self._log.warning(
-                "Token {}... ('{}') zombie | Gamma sin datos | {:.0f}s / 600s",
+                "Token {}... ('{}') zombie | Gamma returned no data | {:.0f}s / 600s",
                 position.token_id[:12],
                 position.market_question[:30],
                 zombie_elapsed,
             )
             return None
 
-        # Gamma devolvió datos — intentar detectar resolución
-        # NO reseteamos zombie_since aquí: si los outcomePrices son intermedios,
-        # el countdown continúa hasta el force-close.
+        # Gamma returned data — try to detect resolution.
+        # We do NOT reset zombie_since here: if outcomePrices are intermediate,
+        # the countdown continues until force-close.
         from src.market_scanner import MarketScanner
         yes_price, _ = MarketScanner._parse_price_pair(raw.get("outcomePrices"))
         if yes_price is None:
             self._log.warning(
-                "Token {}... ('{}') zombie | Gamma OK pero sin outcomePrices | {:.0f}s / 600s",
+                "Token {}... ('{}') zombie | Gamma OK but no outcomePrices | {:.0f}s / 600s",
                 position.token_id[:12],
                 position.market_question[:30],
                 zombie_elapsed,
@@ -956,7 +955,7 @@ class Orchestrator:
             yes_won = False
         else:
             self._log.warning(
-                "Token {}... ('{}') zombie | outcomePrices={:.3f} (pendiente) | {:.0f}s / 600s",
+                "Token {}... ('{}') zombie | outcomePrices={:.3f} (pending) | {:.0f}s / 600s",
                 position.token_id[:12],
                 position.market_question[:30],
                 yes_price,
@@ -965,11 +964,11 @@ class Orchestrator:
             return None  # Gamma still showing intermediate — countdown continues
 
         self._log.info(
-            "Resolución detectada — token {}... | '{}' | YES={:.3f} ({})",
+            "Resolution detected — token {}... | '{}' | YES={:.3f} ({})",
             position.token_id[:12],
             position.market_question[:40],
             yes_price,
-            "YES ganó" if yes_won else "NO ganó",
+            "YES won" if yes_won else "NO won",
         )
         self._zombie_since.pop(position.token_id, None)
         self._resolution_last_check.pop(position.token_id, None)
@@ -980,11 +979,11 @@ class Orchestrator:
             return 0.0 if yes_won else 1.0
 
     def _close_resolved_position(self, position, settlement: float) -> None:
-        """Cierra una posición con el precio de resolución y notifica."""
+        """Closes a position at the settlement price and notifies."""
         pnl_pct = (settlement - position.entry_price) / position.entry_price
-        outcome = "GANADA" if settlement >= 0.99 else "PERDIDA"
+        outcome = "WON" if settlement >= 0.99 else "LOST"
         self._log.info(
-            "Mercado resuelto — posición {} | {} | settlement={:.3f} | "
+            "Market resolved — position {} | {} | settlement={:.3f} | "
             "entry={:.4f} | P&L={:+.1%}",
             outcome,
             position.market_question[:50],
@@ -1023,7 +1022,7 @@ class Orchestrator:
 
         if status.bot_should_pause and self.risk_manager.is_paused:
             self.notifications.notify_bot_paused(
-                reason=self.risk_manager.pause_reason or "Drawdown máximo alcanzado",
+                reason=self.risk_manager.pause_reason or "Maximum drawdown reached",
                 balance=self.paper_trader.balance_eur,
             )
 
@@ -1106,25 +1105,25 @@ def setup_logging(config: BotConfig) -> None:
 
 
 def main() -> None:
-    """Punto de entrada principal del bot."""
+    """Main entry point of the bot."""
     config = load_config()
 
-    # Setup logging primero para capturar todo
+    # Set up logging first to capture everything
     setup_logging(config)
     log = logger.bind(module="main")
 
-    # Validar secrets
+    # Validate secrets
     errors = validate_secrets(config)
     if errors:
         for err in errors:
             log.error("Config error: {}", err)
-        log.error("Abortando por errores de configuración.")
+        log.error("Aborting due to configuration errors.")
         sys.exit(1)
 
-    log.info("Configuración cargada. Provider LLM: {} ({})",
+    log.info("Configuration loaded. LLM provider: {} ({})",
              config.llm.provider, config.llm.model)
 
-    # Crear y arrancar el orchestrator
+    # Create and start the orchestrator
     orchestrator = Orchestrator(config)
     orchestrator.start()
 

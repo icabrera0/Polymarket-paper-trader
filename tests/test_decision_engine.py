@@ -1,17 +1,17 @@
 """
-Tests del DecisionEngine.
+Tests for the DecisionEngine.
 
-Cubren:
-- Filtros pre-decisión: ESPERAR, INSUFFICIENT_DATA, baja confianza, edge bajo.
-- Sizing dinámico (más confianza/edge → más tamaño).
-- Anti-duplicación: misma posición y posición opuesta.
-- Validación final del RiskManager.
-- Reevaluación de posiciones abiertas (stop loss, news reversal).
+Cover:
+- Pre-decision filters: WAIT, INSUFFICIENT_DATA, low confidence, low edge.
+- Dynamic sizing (more confidence/edge → larger size).
+- Anti-duplication: same position and opposite position.
+- Final validation by the RiskManager.
+- Re-evaluation of open positions (stop loss, news reversal).
 - require_news_for_entry.
 
-Sin red. Sin LLM. Sólo lógica determinista del engine.
+No network. No LLM. Only deterministic logic of the engine.
 
-Ejecutar:
+Run:
     pytest tests/test_decision_engine.py -v
 """
 
@@ -123,13 +123,13 @@ def engine(config, risk_manager) -> DecisionEngine:
 
 
 # =====================================================
-# Filtros pre-decisión
+# Pre-decision filters
 # =====================================================
 
 
 class TestPreFilters:
     def test_no_trade_si_insufficient_data(self, engine, config_factory):
-        # Para evitar el filtro de require_news_for_entry, lo desactivamos
+        # To avoid the require_news_for_entry filter, we disable it
         cfg = config_factory()
         cfg.decision.require_news_for_entry = False
         rm = RiskManager(cfg, 150.0)
@@ -194,7 +194,7 @@ class TestRequireNews:
 
 
 # =====================================================
-# Anti-duplicación
+# Anti-duplication
 # =====================================================
 
 
@@ -216,7 +216,7 @@ class TestAntiDuplication:
         assert SkipReason.DUPLICATE_OPEN_POSITION in d.skip_reasons
 
     def test_rechaza_si_hay_posicion_en_lado_opuesto(self, engine):
-        # Tengo BUY_NO, y el LLM recomienda BUY_YES → contradictorio
+        # I have BUY_NO, and the LLM recommends BUY_YES → contradictory
         existing = make_open_position(
             market_question="Will X happen?",
             token_id="0xno",
@@ -251,13 +251,13 @@ class TestAntiDuplication:
 
 
 # =====================================================
-# Sizing dinámico
+# Dynamic sizing
 # =====================================================
 
 
 class TestSizing:
     def test_mayor_confianza_mayor_tamano(self, engine):
-        # Mismo edge, diferente confianza → más confianza, más tamaño
+        # Same edge, different confidence → more confidence, larger size
         a_low = make_analysis(yes_price=0.40, consensus=0.60, confidence=60)
         a_hi = make_analysis(yes_price=0.40, consensus=0.60, confidence=100)
         d_low = engine.decide(a_low, 150.0, [], articles=[make_article()])
@@ -274,17 +274,17 @@ class TestSizing:
         assert d_big.size_eur > d_small.size_eur
 
     def test_size_no_supera_max_del_risk_manager(self, engine, risk_manager):
-        # Confianza 100 + edge 0.5 → debería topar en el máximo
+        # Confidence 100 + edge 0.5 → should cap at the maximum
         a = make_analysis(yes_price=0.30, consensus=0.80, confidence=100)
         d = engine.decide(a, 150.0, [], articles=[make_article()])
         max_allowed = risk_manager.calculate_max_position_size(150.0)
         assert d.size_eur <= max_allowed + 0.01
 
     def test_size_nunca_bajo_minimo(self, engine):
-        # Caso extremo: edge mínimo + confianza mínima → debería ser cerca del mín
+        # Extreme case: minimum edge + minimum confidence → should be near the min
         a = make_analysis(
             yes_price=0.40,
-            consensus=0.45,  # edge 0.05 (justo el límite)
+            consensus=0.45,  # edge 0.05 (exactly the limit)
             confidence=MIN_CONFIDENCE_TO_OPEN,
         )
         d = engine.decide(a, 150.0, [], articles=[make_article()])
@@ -301,7 +301,7 @@ class TestRiskManagerIntegration:
     def test_rechaza_si_risk_manager_rechaza(self, config_factory):
         cfg = config_factory()
         rm = RiskManager(cfg, 150.0)
-        # Forzar pausa simulando drawdown
+        # Force pause by simulating drawdown
         rm.update_balance_and_check_drawdown(80.0)
         assert rm.is_paused
         eng = DecisionEngine(cfg, rm)
@@ -311,7 +311,7 @@ class TestRiskManagerIntegration:
         assert SkipReason.RISK_MANAGER_REJECTED in d.skip_reasons
 
     def test_rechaza_si_demasiadas_posiciones(self, engine):
-        # Crear 3 posiciones en mercados distintos (al límite)
+        # Create 3 positions in different markets (at the limit)
         positions = [
             make_open_position(
                 market_question=f"Will event {i} happen?",
@@ -326,7 +326,7 @@ class TestRiskManagerIntegration:
 
 
 # =====================================================
-# Lado del trade (BUY_YES vs BUY_NO)
+# Trade side (BUY_YES vs BUY_NO)
 # =====================================================
 
 
@@ -347,12 +347,12 @@ class TestSideResolution:
         assert d.entry_price == pytest.approx(0.40)
 
     def test_compra_no_usa_no_token_y_no_price(self, engine):
-        # consensus_yes 0.20 → consensus_no 0.80 implícito; precio_yes 0.40 →
-        # edge negativo (NO infravalorado) → COMPRAR_NO
+        # consensus_yes 0.20 → implicit consensus_no 0.80; price_yes 0.40 →
+        # negative edge (NO undervalued) → COMPRAR_NO
         a = make_analysis(
             yes_price=0.40,
             no_price=0.59,
-            consensus=0.20,           # implica edge -0.20
+            consensus=0.20,           # implies edge -0.20
             confidence=80,
             yes_token="0xyes_token",
             no_token="0xno_token",
@@ -365,19 +365,19 @@ class TestSideResolution:
 
 
 # =====================================================
-# Reevaluación de posiciones abiertas
+# Re-evaluation of open positions
 # =====================================================
 
 
 class TestEvaluateOpenPosition:
     def test_dispara_stop_loss(self, engine):
-        position = make_open_position(entry_price=0.40)  # SL en 0.32
+        position = make_open_position(entry_price=0.40)  # SL at 0.32
         decision = engine.evaluate_open_position(position, current_price=0.30)
         assert decision.should_close
         assert decision.reason == CloseReason.STOP_LOSS
 
     def test_dispara_take_profit(self, engine):
-        position = make_open_position(entry_price=0.40)  # TP en 0.52
+        position = make_open_position(entry_price=0.40)  # TP at 0.52
         decision = engine.evaluate_open_position(position, current_price=0.55)
         assert decision.should_close
         assert decision.reason == CloseReason.TAKE_PROFIT
@@ -388,7 +388,7 @@ class TestEvaluateOpenPosition:
             side=TradeSide.BUY_YES,
             entry_price=0.40,
         )
-        # Nuevo análisis recomienda lo contrario con alta confianza
+        # New analysis recommends the opposite with high confidence
         new_a = make_analysis(
             question="Will X?",
             yes_price=0.42,
@@ -407,7 +407,7 @@ class TestEvaluateOpenPosition:
         new_a = make_analysis(
             yes_price=0.42,
             consensus=0.20,
-            confidence=50,  # < 70 → no cierra
+            confidence=50,  # < 70 → does not close
             recommendation=TradeRecommendation.COMPRAR_NO,
         )
         decision = engine.evaluate_open_position(
@@ -417,7 +417,7 @@ class TestEvaluateOpenPosition:
 
     def test_news_misma_direccion_no_cierra(self, engine):
         position = make_open_position(side=TradeSide.BUY_YES, entry_price=0.40)
-        # Nuevo análisis confirma BUY_YES → no cierra
+        # New analysis confirms BUY_YES → does not close
         new_a = make_analysis(
             yes_price=0.42,
             consensus=0.70,
@@ -431,6 +431,6 @@ class TestEvaluateOpenPosition:
 
     def test_sin_nueva_info_solo_chequea_niveles(self, engine):
         position = make_open_position(entry_price=0.40)
-        # Precio dentro de niveles, sin nueva info → no cierra
+        # Price within levels, no new info → does not close
         decision = engine.evaluate_open_position(position, current_price=0.42)
         assert not decision.should_close

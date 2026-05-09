@@ -1,20 +1,20 @@
 """
-Tests del SentimentAnalyzer.
+Tests for the SentimentAnalyzer.
 
-Cubren:
-- Bypass del LLM cuando no hay noticias suficientes (INSUFFICIENT_DATA).
-- Filtrado de noticias viejas (>48h) antes del LLM.
-- Llamada al LLM con prompt bien formado.
-- Parseo de la respuesta JSON con valores por defecto seguros.
-- Validación post-LLM (downgrade a ESPERAR por baja confianza, edge bajo,
-  contradicción interna).
-- Cache (no llama dos veces por el mismo input).
-- Extracción de JSON con prefacio textual.
+Cover:
+- LLM bypass when there is insufficient news (INSUFFICIENT_DATA).
+- Filtering of old news (>48h) before the LLM.
+- LLM call with a well-formed prompt.
+- Parsing of the JSON response with safe default values.
+- Post-LLM validation (downgrade to WAIT for low confidence, low edge,
+  internal contradiction).
+- Cache (does not call twice for the same input).
+- JSON extraction with textual preamble.
 
-No usa la API real de Anthropic. FakeAnthropicClient devuelve respuestas
-predefinidas.
+Does not use the real Anthropic API. FakeAnthropicClient returns
+predefined responses.
 
-Ejecutar:
+Run:
     pytest tests/test_sentiment_analyzer.py -v
 """
 
@@ -39,16 +39,16 @@ from src.sentiment_analyzer import SentimentAnalyzer
 
 
 # =====================================================
-# Fakes y helpers
+# Fakes and helpers
 # =====================================================
 
 
 class FakeLLMClient(LLMClient):
-    """Cumple el contrato LLMClient para tests."""
+    """Fulfills the LLMClient contract for tests."""
 
     def __init__(self, json_response: Optional[dict[str, Any]] = None) -> None:
-        # No llamamos a super().__init__ para no necesitar un BotConfig real;
-        # los atributos que usamos los setteamos a mano.
+        # We do not call super().__init__ to avoid needing a real BotConfig;
+        # the attributes we use are set manually.
         self.json_response = json_response or {
             "consensus_probability_yes": 0.55,
             "confidence": 70,
@@ -75,7 +75,7 @@ class FakeLLMClient(LLMClient):
         temperature: Optional[float] = None,
         force_json: bool = False,
     ) -> dict[str, Any]:
-        # No usado directamente por los tests; el SentimentAnalyzer llama complete_json
+        # Not used directly by the tests; SentimentAnalyzer calls complete_json
         return {
             "text": "{}",
             "input_tokens": 0,
@@ -108,7 +108,7 @@ class FakeLLMClient(LLMClient):
         return self.json_response, meta
 
 
-# Backward-compat para el resto del archivo
+# Backward-compat for the rest of the file
 FakeAnthropicClient = FakeLLMClient
 
 
@@ -158,12 +158,12 @@ def make_article(
 
 @pytest.fixture
 def analyzer(config) -> SentimentAnalyzer:
-    """SentimentAnalyzer con FakeLLMClient inyectado."""
+    """SentimentAnalyzer with injected FakeLLMClient."""
     return SentimentAnalyzer(config, client=FakeLLMClient())
 
 
 # =====================================================
-# Bypass del LLM (no hay datos)
+# LLM bypass (no data)
 # =====================================================
 
 
@@ -174,11 +174,11 @@ class TestInsufficientData:
         assert result.recommendation == TradeRecommendation.INSUFFICIENT_DATA
         assert result.confidence == 0
         assert result.consensus_probability_yes == market.yes_price
-        # No debe haber llamado al LLM
+        # Must not have called the LLM
         assert analyzer.client.calls == []
 
     def test_una_noticia_con_low_info_disabled(self, config_factory):
-        """Con allow_low_info_trades=False y 1 sola noticia → INSUFFICIENT_DATA."""
+        """With allow_low_info_trades=False and only 1 article → INSUFFICIENT_DATA."""
         cfg = config_factory()
         cfg.decision.allow_low_info_trades = False
         analyzer = SentimentAnalyzer(cfg, client=FakeLLMClient())
@@ -187,15 +187,15 @@ class TestInsufficientData:
         assert analyzer.client.calls == []
 
     def test_una_noticia_con_low_info_enabled(self, config_factory):
-        """Con allow_low_info_trades=True y 1 noticia → SÍ se analiza, marcado low_info."""
+        """With allow_low_info_trades=True and 1 article → IS analyzed, marked low_info."""
         cfg = config_factory()
         cfg.decision.allow_low_info_trades = True
         cfg.decision.low_info_min_articles = 1
         analyzer = SentimentAnalyzer(cfg, client=FakeLLMClient())
         result = analyzer.analyze(make_market(), [make_article()])
-        # SÍ llamó al LLM
+        # DID call the LLM
         assert len(analyzer.client.calls) == 1
-        # Está marcado como low_info
+        # Marked as low_info
         assert result.is_low_info is True
 
     def test_solo_noticias_viejas_devuelve_insufficient_data(self, analyzer):
@@ -207,7 +207,7 @@ class TestInsufficientData:
 
 
 # =====================================================
-# Filtrado pre-LLM
+# Pre-LLM filtering
 # =====================================================
 
 
@@ -222,11 +222,11 @@ class TestFiltering:
             for i in range(5)
         ]
         analyzer.analyze(market, articles)
-        # Debe haber llamado al LLM con solo las 3 recientes
+        # Must have called the LLM with only the 3 recent ones
         assert len(analyzer.client.calls) == 1
         prompt = analyzer.client.calls[0]["user_prompt"]
         assert "Recent" in prompt
-        # Las viejas no deberían aparecer
+        # The old ones should not appear
         assert "Old 0" not in prompt
 
     def test_top_10_por_score(self, analyzer):
@@ -237,13 +237,13 @@ class TestFiltering:
         ]
         analyzer.analyze(market, articles)
         prompt = analyzer.client.calls[0]["user_prompt"]
-        # News 19 (mejor score) debe estar; News 0 (peor) NO debe estar
+        # News 19 (best score) must be there; News 0 (worst) must NOT be there
         assert "News 19" in prompt
         assert "News 0" not in prompt
 
 
 # =====================================================
-# Llamada al LLM y parseo
+# LLM call and parsing
 # =====================================================
 
 
@@ -286,7 +286,7 @@ class TestLLMCall:
 
     def test_consensus_fuera_de_rango_se_clipa(self, config):
         client = FakeAnthropicClient(json_response={
-            "consensus_probability_yes": 1.5,  # fuera de [0, 1]
+            "consensus_probability_yes": 1.5,  # outside [0, 1]
             "confidence": 70,
             "sentiment_score": 0.3,
             "impact_score": 60,
@@ -309,7 +309,7 @@ class TestLLMCall:
             "confidence": 70,
             "sentiment_score": 0.0,
             "impact_score": 50,
-            "recommendation": "INVENTADO",  # no existe
+            "recommendation": "INVENTED",  # does not exist
             "timeframe": "HORAS",
             "contradictory_sources": False,
             "summary": "...",
@@ -323,7 +323,7 @@ class TestLLMCall:
 
 
 # =====================================================
-# Validación post-LLM
+# Post-LLM validation
 # =====================================================
 
 
@@ -344,18 +344,18 @@ class TestValidation:
         return base
 
     def test_downgrade_si_confidence_baja(self, config):
-        # min_confidence_threshold del conftest es 60
+        # min_confidence_threshold from conftest is 60
         client = FakeAnthropicClient(self._llm_with(confidence=40))
         analyzer = SentimentAnalyzer(config, client=client)
         result = analyzer.analyze(
             make_market(yes_price=0.30),
             [make_article(), make_article(title="b")],
         )
-        # consensus 0.55, price 0.30, edge 0.25 (suficiente) pero conf 40 baja
+        # consensus 0.55, price 0.30, edge 0.25 (sufficient) but conf 40 is low
         assert result.recommendation == TradeRecommendation.ESPERAR
 
     def test_downgrade_si_edge_pequeno(self, config):
-        # consensus 0.42, price 0.40 → edge 0.02 (< 0.05 mínimo)
+        # consensus 0.42, price 0.40 → edge 0.02 (< 0.05 minimum)
         client = FakeAnthropicClient(self._llm_with(
             consensus_probability_yes=0.42, confidence=80,
         ))
@@ -367,7 +367,7 @@ class TestValidation:
         assert result.recommendation == TradeRecommendation.ESPERAR
 
     def test_downgrade_si_recomendacion_contradice_edge(self, config):
-        # LLM dice COMPRAR_YES pero consensus < precio (edge negativo)
+        # LLM says COMPRAR_YES but consensus < price (negative edge)
         client = FakeAnthropicClient(self._llm_with(
             consensus_probability_yes=0.20,  # edge = 0.20 - 0.40 = -0.20
             confidence=80,
@@ -382,7 +382,7 @@ class TestValidation:
 
     def test_compra_yes_se_mantiene_si_todo_ok(self, config):
         client = FakeAnthropicClient(self._llm_with(
-            consensus_probability_yes=0.60,  # edge = 0.20 (positivo)
+            consensus_probability_yes=0.60,  # edge = 0.20 (positive)
             confidence=85,
             recommendation="COMPRAR_YES",
         ))
@@ -395,7 +395,7 @@ class TestValidation:
 
     def test_compra_no_se_mantiene_si_todo_ok(self, config):
         client = FakeAnthropicClient(self._llm_with(
-            consensus_probability_yes=0.20,  # edge = -0.40 (NO infravalorado)
+            consensus_probability_yes=0.20,  # edge = -0.40 (NO undervalued)
             confidence=85,
             recommendation="COMPRAR_NO",
         ))
@@ -431,7 +431,7 @@ class TestCache:
     def test_cambio_de_precio_invalida_cache(self, analyzer):
         articles = [make_article(), make_article(title="b")]
         analyzer.analyze(make_market(yes_price=0.40), articles)
-        # Mismo mercado pero precio movido > redondeo de 3 decimales
+        # Same market but price moved > 3-decimal rounding
         analyzer.analyze(make_market(yes_price=0.50), articles)
         assert len(analyzer.client.calls) == 2
 
@@ -443,7 +443,7 @@ class TestCache:
 
 
 # =====================================================
-# Resiliencia
+# Resilience
 # =====================================================
 
 
@@ -479,7 +479,7 @@ class TestResilience:
 
         client = FakeLLMClient()
         client.raise_on_call = CreditsExhausted(
-            "Cuenta sin créditos. Recarga en console.anthropic.com",
+            "Account has no credits. Recharge at console.anthropic.com",
             retry_after_seconds=3600,
         )
         analyzer = SentimentAnalyzer(config, client=client)

@@ -1,17 +1,17 @@
 """
-Tests del MarketScanner.
+Tests for the MarketScanner.
 
-Cubren:
-- Parsing defensivo de respuestas crudas de la Gamma API (listas o strings JSON,
-  campos faltantes, precios fuera de rango).
-- Filtros de operabilidad (volumen, spread, tiempo a cierre, categoría).
-- Búsqueda por keywords (case-insensitive, en pregunta y descripción).
-- Caché del escaneo.
-- Comportamiento ante fallos de la API.
+Cover:
+- Defensive parsing of raw responses from the Gamma API (lists or JSON strings,
+  missing fields, out-of-range prices).
+- Tradeability filters (volume, spread, time to close, category).
+- Keyword search (case-insensitive, in question and description).
+- Scan cache.
+- Behavior on API failures.
 
-No hace red. Inyecta un cliente falso en MarketScanner.
+No network. Injects a fake client into MarketScanner.
 
-Ejecutar:
+Run:
     pytest tests/test_market_scanner.py -v
 """
 
@@ -29,12 +29,12 @@ from src.models import MarketSnapshot
 
 
 # =====================================================
-# Cliente falso para inyectar en MarketScanner
+# Fake client to inject into MarketScanner
 # =====================================================
 
 
 class FakeGammaClient:
-    """Implementa la misma interfaz que GammaApiClient para tests."""
+    """Implements the same interface as GammaApiClient for tests."""
 
     def __init__(
         self,
@@ -62,7 +62,7 @@ class FakeGammaClient:
 
 
 def _future_iso(hours: float) -> str:
-    """ISO string para `now + hours`."""
+    """ISO string for `now + hours`."""
     return (
         datetime.now(timezone.utc) + timedelta(hours=hours)
     ).isoformat().replace("+00:00", "Z")
@@ -74,7 +74,7 @@ def make_raw_market(
     yes_price: float = 0.40,
     no_price: float = 0.58,
     volume_24h: float = 25000.0,
-    end_hours_from_now: float = 240.0,  # 10 días
+    end_hours_from_now: float = 240.0,  # 10 days
     category: str = "Sports",
     active: bool = True,
     closed: bool = False,
@@ -85,7 +85,7 @@ def make_raw_market(
     yes_token: str = "0xyes",
     no_token: str = "0xno",
 ) -> dict[str, Any]:
-    """Construye un mercado crudo simulando el formato de la Gamma API."""
+    """Builds a raw market simulating the Gamma API format."""
     tokens = [yes_token, no_token]
     prices = [str(yes_price), str(no_price)]
     if use_string_arrays:
@@ -116,7 +116,7 @@ def make_raw_market(
 
 @pytest.fixture
 def scanner(config) -> MarketScanner:
-    """MarketScanner con un FakeGammaClient vacío por defecto."""
+    """MarketScanner with an empty FakeGammaClient by default."""
     return MarketScanner(config, client=FakeGammaClient())
 
 
@@ -155,7 +155,7 @@ class TestParseMarket:
         assert scanner.parse_market(raw) is None
 
     def test_descarta_si_precio_fuera_de_rango(self, scanner):
-        # yes=0 y no=1 indica mercado resuelto
+        # yes=0 and no=1 indicates a resolved market
         raw = make_raw_market(yes_price=0.0, no_price=1.0)
         assert scanner.parse_market(raw) is None
 
@@ -170,7 +170,7 @@ class TestParseMarket:
         assert snap.spread == pytest.approx(0.02)
 
     def test_spread_fallback_cuando_no_hay_bid_ask(self, scanner):
-        # yes 0.40 + no 0.58 = 0.98 → spread implícito 0.02
+        # yes 0.40 + no 0.58 = 0.98 → implicit spread 0.02
         raw = make_raw_market(yes_price=0.40, no_price=0.58)
         snap = scanner.parse_market(raw)
         assert snap is not None
@@ -178,21 +178,21 @@ class TestParseMarket:
 
     def test_tolera_end_date_invalido(self, scanner):
         raw = make_raw_market()
-        raw["endDate"] = "fecha-mala"
+        raw["endDate"] = "bad-date"
         snap = scanner.parse_market(raw)
         assert snap is not None
         assert snap.end_date is None
 
     def test_tolera_volumen_no_numerico(self, scanner):
         raw = make_raw_market()
-        raw["volume24hr"] = "no-soy-numero"
+        raw["volume24hr"] = "not-a-number"
         snap = scanner.parse_market(raw)
         assert snap is not None
         assert snap.volume_24h_usd == 0.0
 
 
 # =====================================================
-# Filtros de operabilidad
+# Tradeability filters
 # =====================================================
 
 
@@ -207,7 +207,7 @@ class TestIsTradeable:
         snap = scanner.parse_market(raw)
         assert snap is not None
         ok, reasons = scanner.is_tradeable(snap)
-        assert ok, f"Debería ser operable, pero rechazado por: {reasons}"
+        assert ok, f"Should be tradeable, but rejected because: {reasons}"
 
     def test_rechaza_volumen_bajo(self, scanner):
         raw = make_raw_market(volume_24h=5000.0)  # < 10000
@@ -225,7 +225,7 @@ class TestIsTradeable:
         assert "wide_spread" in reasons
 
     def test_rechaza_cerrando_muy_pronto(self, scanner):
-        # Cierra en 1h, mínimo es 2h
+        # Closes in 1h, minimum is 2h
         raw = make_raw_market(end_hours_from_now=1.0)
         snap = scanner.parse_market(raw)
         ok, reasons = scanner.is_tradeable(snap)
@@ -233,7 +233,7 @@ class TestIsTradeable:
         assert "closing_too_soon" in reasons
 
     def test_rechaza_cerrando_muy_lejos(self, scanner):
-        # Cierra en 60 días, máximo son 30
+        # Closes in 60 days, maximum is 30
         raw = make_raw_market(end_hours_from_now=60 * 24)
         snap = scanner.parse_market(raw)
         ok, reasons = scanner.is_tradeable(snap)
@@ -259,7 +259,7 @@ class TestIsTradeable:
 
 
 # =====================================================
-# Búsqueda por keywords
+# Keyword search
 # =====================================================
 
 
@@ -313,7 +313,7 @@ class TestSearchByKeywords:
 
 
 # =====================================================
-# Escaneo (caché y errores)
+# Scan (cache and errors)
 # =====================================================
 
 
@@ -357,7 +357,7 @@ class TestScan:
         first = scanner.scan()
         assert len(first) == 1
 
-        # Ahora la API falla; debe devolver el caché previo
+        # Now the API fails; should return the previous cache
         client.raise_on_fetch = GammaApiError("simulated outage")
         result = scanner.scan(force_refresh=True)
         assert len(result) == 1
@@ -373,7 +373,7 @@ class TestScan:
         client = FakeGammaClient(
             markets=[
                 make_raw_market(market_id="ok", volume_24h=25000.0),
-                {"id": "broken"},  # falta casi todo
+                {"id": "broken"},  # missing almost everything
                 make_raw_market(market_id="ok2", volume_24h=30000.0),
             ]
         )

@@ -1,26 +1,26 @@
 """
-Cliente GDELT 2.0 DOC API (https://api.gdeltproject.org/api/v2/doc/doc).
+GDELT 2.0 DOC API client (https://api.gdeltproject.org/api/v2/doc/doc).
 
-Hablamos directamente con la API HTTP de GDELT en lugar de usar la librería
-`gdeltdoc`: es más simple, más predecible y no añade una dependencia que
-puede romperse con cambios upstream. La GDELT DOC API:
+We talk directly to the GDELT HTTP API instead of using the `gdeltdoc` library:
+it is simpler, more predictable, and avoids adding a dependency that could
+break with upstream changes. The GDELT DOC API:
 
-- Es pública, no necesita API key.
-- Devuelve JSON con artículos vistos en los últimos N minutos/horas/días.
-- Soporta queries booleanas y filtros por idioma/país/dominio.
-- Es muy rápida (~ms) pero no devuelve descripción/contenido, solo URL+título.
+- Is public, no API key required.
+- Returns JSON with articles seen in the last N minutes/hours/days.
+- Supports boolean queries and filters by language/country/domain.
+- Is very fast (~ms) but does not return description/content, only URL+title.
 
-Notas operativas (lecciones aprendidas en pruebas):
-- GDELT rechaza timespans menores a ~1h con "Timespan is too short". Si
-  configuras 15min, lo elevamos automáticamente a 1h.
-- GDELT requiere PARÉNTESIS alrededor de queries con OR de 3+ términos:
-  CORRECTO: ("trump" OR "biden" OR "spain")
-  INCORRECTO: "trump" OR "biden" OR "spain"  (devuelve error textual)
-- GDELT tiene rate limits agresivos: lanzamos 429 si pegamos batches sin
-  sleep. Esperamos GDELT_BATCH_DELAY_SECONDS entre cada batch.
-- GDELT acepta hasta ~5-7 términos OR por query antes de empezar a fallar.
-  Hacemos batching cuando hay más keywords.
-- Una query sin resultados es una respuesta vacía válida (no un error).
+Operational notes (lessons learned from testing):
+- GDELT rejects timespans shorter than ~1h with "Timespan is too short". If
+  you configure 15min, we automatically raise it to 1h.
+- GDELT requires PARENTHESES around queries with OR of 3+ terms:
+  CORRECT: ("trump" OR "biden" OR "spain")
+  INCORRECT: "trump" OR "biden" OR "spain"  (returns a text error)
+- GDELT has aggressive rate limits: we get 429 if we send batches without
+  sleep. We wait GDELT_BATCH_DELAY_SECONDS between each batch.
+- GDELT accepts up to ~5-7 OR terms per query before starting to fail.
+  We do batching when there are more keywords.
+- A query with no results is a valid empty response (not an error).
 
 Docs: https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
 """
@@ -46,24 +46,24 @@ from src.models import NewsArticle, NewsSource, _new_article_id
 
 GDELT_BASE_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 
-# Mínimo aceptado por GDELT en la práctica
+# Minimum accepted by GDELT in practice
 MIN_TIMESPAN = "1h"
 KEYWORDS_PER_QUERY = 5
-GDELT_BATCH_DELAY_SECONDS = 1.5         # Para evitar HTTP 429
-GDELT_RATE_LIMIT_BACKOFF = 5.0          # Si nos llega un 429, esperamos esto extra
+GDELT_BATCH_DELAY_SECONDS = 1.5         # To avoid HTTP 429
+GDELT_RATE_LIMIT_BACKOFF = 5.0          # If we receive a 429, we wait this extra time
 
 
 class GdeltApiError(Exception):
-    """Error comunicándose con GDELT."""
+    """Error communicating with GDELT."""
 
 
 class GdeltClient:
-    """Cliente GDELT que devuelve NewsArticle."""
+    """GDELT client that returns NewsArticle objects."""
 
     def __init__(self, config: BotConfig) -> None:
         self.config = config
         self.cfg = config.news.gdelt
-        self.timeout = config.polymarket.request_timeout_seconds  # reutilizamos
+        self.timeout = config.polymarket.request_timeout_seconds  # reused
 
         self._log = logger.bind(module="gdelt_client")
         self._session = requests.Session()
@@ -75,7 +75,7 @@ class GdeltClient:
         )
 
     # =====================================================
-    # API pública
+    # Public API
     # =====================================================
 
     def fetch_articles(
@@ -84,11 +84,11 @@ class GdeltClient:
         max_results: Optional[int] = None,
         timespan: Optional[str] = None,
     ) -> list[NewsArticle]:
-        """Busca artículos vistos por GDELT que mencionen los keywords.
+        """Searches for articles seen by GDELT that mention the keywords.
 
-        Si hay más de KEYWORDS_PER_QUERY keywords, hace varias queries en lote
-        y une los resultados (deduplicados por URL). Espera entre batches para
-        respetar el rate limit de GDELT.
+        If there are more than KEYWORDS_PER_QUERY keywords, it makes multiple
+        batched queries and merges the results (deduplicated by URL). It waits
+        between batches to respect GDELT's rate limit.
         """
         if not keywords:
             return []
@@ -100,7 +100,7 @@ class GdeltClient:
         if not clean_kws:
             return []
 
-        # Lotes de KEYWORDS_PER_QUERY
+        # Batches of KEYWORDS_PER_QUERY
         batches = [
             clean_kws[i : i + KEYWORDS_PER_QUERY]
             for i in range(0, len(clean_kws), KEYWORDS_PER_QUERY)
@@ -109,12 +109,12 @@ class GdeltClient:
         all_articles: list[NewsArticle] = []
         seen_urls: set[str] = set()
         for i, batch in enumerate(batches):
-            # Sleep entre batches (no antes del primero)
+            # Sleep between batches (not before the first one)
             if i > 0:
                 time.sleep(GDELT_BATCH_DELAY_SECONDS)
 
-            # Query con paréntesis: GDELT lo exige cuando hay 3+ términos OR.
-            # Con 1 solo término no hace falta pero no estorba.
+            # Query with parentheses: GDELT requires them when there are 3+ OR terms.
+            # With a single term it is not necessary but does not hurt.
             quoted = [f'"{k}"' for k in batch]
             if len(quoted) == 1:
                 query = quoted[0]
@@ -128,11 +128,11 @@ class GdeltClient:
                     max_records=max_results,
                 )
             except GdeltApiError as exc:
-                # Si fue 429, esperamos extra y reintentamos UNA vez más
+                # If it was a 429, wait extra and retry ONE more time
                 if "429" in str(exc):
                     self._log.warning(
-                        "GDELT rate limited en batch {}, esperando {}s y "
-                        "reintentando una vez",
+                        "GDELT rate limited on batch {}, waiting {}s and "
+                        "retrying once",
                         i + 1,
                         GDELT_RATE_LIMIT_BACKOFF,
                     )
@@ -145,14 +145,14 @@ class GdeltClient:
                         )
                     except GdeltApiError as exc2:
                         self._log.warning(
-                            "GDELT batch {} falló tras reintento: {}",
+                            "GDELT batch {} failed after retry: {}",
                             i + 1,
                             exc2,
                         )
                         continue
                 else:
                     self._log.warning(
-                        "GDELT batch {} falló ({}): {}",
+                        "GDELT batch {} failed ({}): {}",
                         i + 1,
                         batch,
                         exc,
@@ -167,7 +167,7 @@ class GdeltClient:
                 all_articles.append(art)
 
         self._log.info(
-            "GDELT: {} artículos para {} keywords en {} batches (timespan={})",
+            "GDELT: {} articles for {} keywords in {} batches (timespan={})",
             len(all_articles),
             len(clean_kws),
             len(batches),
@@ -207,17 +207,17 @@ class GdeltClient:
         except requests.RequestException as exc:
             raise GdeltApiError(str(exc)) from exc
 
-        # GDELT a veces devuelve 200 OK con cuerpo vacío o con un error textual
-        # tipo "Timespan is too short.". Detectamos esos casos.
+        # GDELT sometimes returns 200 OK with an empty body or a text error
+        # such as "Timespan is too short.". We detect those cases.
         text = response.text.strip()
         if not text:
             return []
-        # Detectar respuesta de error textual
+        # Detect text error response
         if not text.startswith("{") and not text.startswith("["):
-            self._log.debug("GDELT devolvió texto no-JSON: {}", text[:200])
-            # Si es un error de timespan, propagar para que se sepa
+            self._log.debug("GDELT returned non-JSON text: {}", text[:200])
+            # If it is a timespan error, propagate so it is known
             if "timespan" in text.lower():
-                raise GdeltApiError(f"GDELT rechazó la query: {text[:200]}")
+                raise GdeltApiError(f"GDELT rejected the query: {text[:200]}")
             return []
         try:
             data = response.json()
@@ -237,14 +237,14 @@ class GdeltClient:
 
     @staticmethod
     def _normalize_timespan(timespan: str) -> str:
-        """Eleva timespans muy cortos al mínimo aceptado por GDELT.
+        """Raises very short timespans to the minimum accepted by GDELT.
 
-        GDELT rechaza valores como '15min' con "Timespan is too short".
-        El mínimo seguro empíricamente es '1h'.
+        GDELT rejects values like '15min' with "Timespan is too short".
+        The empirically safe minimum is '1h'.
         """
         if not timespan:
             return MIN_TIMESPAN
-        # Patrón: número + unidad (min, h, d, w, m)
+        # Pattern: number + unit (min, h, d, w, m)
         match = re.match(r"^(\d+)\s*(min|h|d|w|m)$", timespan.strip().lower())
         if not match:
             return MIN_TIMESPAN
@@ -273,7 +273,7 @@ class GdeltClient:
                 source=NewsSource.GDELT,
                 source_name=source_name,
                 title=title,
-                description="",  # GDELT no incluye descripción
+                description="",  # GDELT does not include description
                 content="",
                 url=url,
                 author=None,
@@ -281,12 +281,12 @@ class GdeltClient:
                 published_at=published_at,
             )
         except (TypeError, ValueError) as exc:
-            self._log.debug("Artículo GDELT mal formado: {}", exc)
+            self._log.debug("Malformed GDELT article: {}", exc)
             return None
 
     @staticmethod
     def _parse_seendate(value: Any) -> Optional[datetime]:
-        """GDELT usa formato YYYYMMDDTHHMMSSZ (ej: 20240315T120000Z)."""
+        """GDELT uses format YYYYMMDDTHHMMSSZ (e.g.: 20240315T120000Z)."""
         if not value or not isinstance(value, str):
             return None
         try:

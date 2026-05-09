@@ -1,16 +1,16 @@
 """
-Tests del NewsIngestor.
+Tests for the NewsIngestor.
 
-Cubren:
-- Score heurístico de impacto (recencia, reputación, keywords, urgencia).
-- Deduplicación por URL exacta y por similitud difusa de títulos.
-- Resiliencia: fallo de un cliente no impide que el otro contribuya.
-- Cliente deshabilitado / ausente.
-- Caché por keywords.
+Cover:
+- Heuristic impact score (recency, reputation, keywords, urgency).
+- Deduplication by exact URL and by fuzzy title similarity.
+- Resilience: failure of one client does not prevent the other from contributing.
+- Disabled / absent client.
+- Cache by keywords.
 
-No hace red. Inyecta clientes falsos vía dependency injection.
+No network. Injects fake clients via dependency injection.
 
-Ejecutar:
+Run:
     pytest tests/test_news_ingestor.py -v
 """
 
@@ -26,12 +26,12 @@ from src.news_ingestor import NewsIngestor
 
 
 # =====================================================
-# Fakes y helpers
+# Fakes and helpers
 # =====================================================
 
 
 class FakeNewsClient:
-    """Implementa el protocolo de cliente de noticias para tests."""
+    """Implements the news client protocol for tests."""
 
     def __init__(
         self,
@@ -59,7 +59,7 @@ def make_article(
     description: str = "",
     hours_ago: float = 1.0,
 ) -> NewsArticle:
-    """Helper para crear NewsArticle de test rápidamente."""
+    """Helper to quickly create a test NewsArticle."""
     if url is None:
         url = f"https://example.com/{title.lower().replace(' ', '-')}"
     published_at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
@@ -77,7 +77,7 @@ def make_article(
 
 @pytest.fixture
 def ingestor(config) -> NewsIngestor:
-    """NewsIngestor con clientes vacíos (no hace red)."""
+    """NewsIngestor with empty clients (no network)."""
     return NewsIngestor(
         config,
         newsapi_client=FakeNewsClient(),
@@ -99,7 +99,7 @@ class TestScoring:
             hours_ago=0.5,
         )
         score = ingestor._score(art, ["Spain"])
-        # 30 (recencia) + 30 (Reuters) + 10 (1 keyword) + 10 (BREAKING) ≈ 80
+        # 30 (recency) + 30 (Reuters) + 10 (1 keyword) + 10 (BREAKING) ≈ 80
         assert score >= 75
 
     def test_articulo_viejo_fuente_desconocida_score_bajo(self, ingestor):
@@ -107,10 +107,10 @@ class TestScoring:
             title="Some unrelated old story",
             source_name="random-blog.xyz",
             description="",
-            hours_ago=48.0,  # 2 días → 0 puntos por recencia
+            hours_ago=48.0,  # 2 days → 0 points for recency
         )
         score = ingestor._score(art, ["Spain"])
-        # 0 (recencia) + 10 (no-reputable) + 0 (sin match) + 0 (sin urgencia) = 10
+        # 0 (recency) + 10 (non-reputable) + 0 (no match) + 0 (no urgency) = 10
         assert score == pytest.approx(10.0)
 
     def test_match_keywords_acumula_hasta_30(self, ingestor):
@@ -118,10 +118,10 @@ class TestScoring:
             title="Trump and Biden meet to discuss Spain",
             description="",
             source_name="random-blog",
-            hours_ago=24.0,  # 0 puntos por recencia
+            hours_ago=24.0,  # 0 points for recency
         )
         score = ingestor._score(art, ["Trump", "Biden", "Spain"])
-        # 0 (recencia) + 10 (no-reputable) + 30 (3 keywords) = 40
+        # 0 (recency) + 10 (non-reputable) + 30 (3 keywords) = 40
         assert score == pytest.approx(40.0)
         assert set(art.matched_keywords) == {"trump", "biden", "spain"}
 
@@ -133,7 +133,7 @@ class TestScoring:
             hours_ago=24.0,
         )
         score = ingestor._score(art, ["a", "b", "c", "d", "e"])
-        # Solo 3 keywords cuentan → 30 puntos máx en esa categoría
+        # Only 3 keywords count → 30 points max in that category
         assert score == pytest.approx(40.0)  # 0 + 10 + 30
         assert len(art.matched_keywords) == 3
 
@@ -144,7 +144,7 @@ class TestScoring:
         s0 = ingestor._score(art_now, [])
         s12 = ingestor._score(art_12h, [])
         s24 = ingestor._score(art_24h, [])
-        # Diferencia debe ser ~15 puntos cada 12h
+        # Difference should be ~15 points every 12h
         assert s0 - s12 == pytest.approx(15.0, abs=0.5)
         assert s12 - s24 == pytest.approx(15.0, abs=0.5)
 
@@ -156,7 +156,7 @@ class TestScoring:
         assert s_urg - s_norm == pytest.approx(10.0)
 
     def test_score_capado_en_100(self, ingestor):
-        # Receta para superar 100 si no hay capping
+        # Recipe to exceed 100 without capping
         art = make_article(
             title="BREAKING: Trump Biden Spain Election",
             description="",
@@ -179,7 +179,7 @@ class TestScoring:
 
 
 # =====================================================
-# Deduplicación
+# Deduplication
 # =====================================================
 
 
@@ -188,7 +188,7 @@ class TestDeduplication:
         url = "https://reuters.com/article-1"
         a1 = make_article(title="Title v1", url=url, hours_ago=1.0)
         a2 = make_article(title="Title v2", url=url, hours_ago=1.0)
-        # Forzar scores diferentes
+        # Force different scores
         a1.preliminary_impact_score = 50
         a2.preliminary_impact_score = 80
         result = ingestor._deduplicate([a1, a2])
@@ -206,7 +206,7 @@ class TestDeduplication:
             source_name="Bloomberg",
         )
         a1.preliminary_impact_score = 60
-        a2.preliminary_impact_score = 75  # mejor → debe ser el ganador
+        a2.preliminary_impact_score = 75  # better → should be the winner
         result = ingestor._deduplicate([a1, a2])
         assert len(result) == 1
         assert result[0].url == "https://b.com/1"
@@ -224,7 +224,7 @@ class TestDeduplication:
 
 
 # =====================================================
-# Fetch — orquestación
+# Fetch — orchestration
 # =====================================================
 
 
@@ -245,7 +245,7 @@ class TestFetch:
         assert len(result) == 2
 
     def test_devuelve_ordenado_por_score(self, config):
-        # Bloomberg artículo BREAKING reciente debería ganar a un blog viejo
+        # Bloomberg article BREAKING recent should beat an old blog
         good = make_article(
             title="BREAKING: Spain wins",
             url="https://bloomberg.com/1",
@@ -294,7 +294,7 @@ class TestFetch:
         )
         ingestor.fetch(["Spain"])
         ingestor.fetch(["Spain"])
-        ingestor.fetch(["spain"])  # case insensitive → mismo cache key
+        ingestor.fetch(["spain"])  # case insensitive → same cache key
         assert client.fetch_calls == 1
 
     def test_force_refresh_rompe_cache(self, config):
@@ -310,9 +310,9 @@ class TestFetch:
         assert client.fetch_calls == 2
 
     def test_max_articles_recorta_resultado(self, config):
-        # Usar titles claramente distintos para que la dedup difusa no los
-        # colapse (lección aprendida: "Story 0" vs "Story 1" parecen duplicados
-        # para token_set_ratio porque comparten la mayor parte de tokens).
+        # Use clearly distinct titles so fuzzy dedup does not collapse them
+        # (lesson learned: "Story 0" vs "Story 1" look like duplicates
+        # for token_set_ratio because they share most tokens).
         distinct_titles = [
             "Spain wins football championship final",
             "Bitcoin reaches new all-time price record",
@@ -353,9 +353,9 @@ class TestFetch:
             newsapi_client=None,
             gdelt_client=None,
         )
-        # NOTA: si la newsapi_key está en config, NewsIngestor podría
-        # auto-instanciar el cliente real. En conftest tenemos `newsapi_key="test-key"`
-        # así que necesitamos forzar deshabilitado para este test.
+        # NOTE: if newsapi_key is in config, NewsIngestor might
+        # auto-instantiate the real client. In conftest we have `newsapi_key="test-key"`
+        # so we need to force it disabled for this test.
         ingestor.newsapi_client = None
         ingestor.gdelt_client = None
         ingestor.telegram_client = None
@@ -363,7 +363,7 @@ class TestFetch:
         assert result == []
 
     def test_telegram_client_se_integra(self, config):
-        """El ingestor debe combinar artículos de Telegram con los demás."""
+        """The ingestor must combine Telegram articles with the others."""
         from src.models import NewsSource
 
         tg_articles = [
@@ -387,7 +387,7 @@ class TestFetch:
             gdelt_client=FakeNewsClient(articles=gdelt_articles),
             telegram_client=FakeNewsClient(articles=tg_articles),
         )
-        # Bloquea el cliente auto-instanciado por la config para no tocar red
+        # Block the auto-instantiated client from config to avoid touching the network
         ingestor.newsapi_client = None
         result = ingestor.fetch(["news"])
         sources = {a.source for a in result}
@@ -395,7 +395,7 @@ class TestFetch:
         assert NewsSource.GDELT in sources
 
     def test_telegram_client_falla_no_rompe_otros(self, config):
-        """Si Telegram falla, NewsAPI/GDELT siguen contribuyendo."""
+        """If Telegram fails, NewsAPI/GDELT keep contributing."""
         good_article = make_article(title="Survives", url="https://ok.com/1")
         ingestor = NewsIngestor(
             config,

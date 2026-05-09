@@ -1,23 +1,23 @@
 """
-Ejecuta el backtesting del bot sobre mercados resueltos de Polymarket.
+Runs the bot backtesting against resolved Polymarket markets.
 
-Uso:
-    python scripts/run_backtest.py                    # 50 mercados, modo current
-    python scripts/run_backtest.py --mode replay      # Noticias históricas (más lento)
-    python scripts/run_backtest.py --markets 100      # Más mercados
-    python scripts/run_backtest.py --balance 200      # Balance inicial personalizado
-    python scripts/run_backtest.py --excel            # Exportar resultados a Excel
+Usage:
+    python scripts/run_backtest.py                    # 50 markets, current mode
+    python scripts/run_backtest.py --mode replay      # Historical news (slower)
+    python scripts/run_backtest.py --markets 100      # More markets
+    python scripts/run_backtest.py --balance 200      # Custom initial balance
+    python scripts/run_backtest.py --excel            # Export results to Excel
 
-NOTAS IMPORTANTES:
-  - El modo "current" tiene look-ahead bias (las noticias son de hoy, no del
-    momento del mercado). Sirve para calibrar el pipeline, NO para medir
-    la estrategia de forma real.
-  - El modo "replay" es más realista pero depende de la cobertura histórica
-    de GDELT, que es limitada para eventos nicho.
-  - El backtest usa una DB separada (data/backtest.db) y no toca la producción.
-  - Si usas Ollama, asegúrate de que el servicio esté corriendo.
-  - Cada mercado analizado consume ~1 llamada al LLM. Con 50 mercados y
-    Ollama: ~10-15 minutos. Con Anthropic: ~$0.05-0.10.
+IMPORTANT NOTES:
+  - "current" mode has look-ahead bias (news is from today, not from the time
+    of the market). Useful for calibrating the pipeline, NOT for measuring
+    the strategy in a realistic way.
+  - "replay" mode is more realistic but depends on GDELT historical coverage,
+    which is limited for niche events.
+  - The backtest uses a separate DB (data/backtest.db) and does not touch production.
+  - If using Ollama, make sure the service is running.
+  - Each analyzed market consumes ~1 LLM call. With 50 markets and
+    Ollama: ~10-15 minutes. With Anthropic: ~$0.05-0.10.
 """
 
 from __future__ import annotations
@@ -36,33 +36,33 @@ from src.config_loader import load_config  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Backtesting del Polymarket Paper Trading Bot"
+        description="Backtesting of the Polymarket Paper Trading Bot"
     )
     parser.add_argument(
         "--mode",
         choices=["current", "replay"],
         default="current",
         help=(
-            "current: noticias de hoy (look-ahead bias, rápido). "
-            "replay: noticias históricas de GDELT (más realista, más lento)."
+            "current: today's news (look-ahead bias, fast). "
+            "replay: historical GDELT news (more realistic, slower)."
         ),
     )
     parser.add_argument(
         "--markets",
         type=int,
         default=50,
-        help="Número de mercados resueltos a analizar (default: 50).",
+        help="Number of resolved markets to analyze (default: 50).",
     )
     parser.add_argument(
         "--balance",
         type=float,
         default=None,
-        help="Balance inicial en EUR (default: el del config, 150€).",
+        help="Initial balance in EUR (default: from config, 150€).",
     )
     parser.add_argument(
         "--excel",
         action="store_true",
-        help="Exportar resultados a Excel en reports/backtest_YYYY-MM-DD.xlsx",
+        help="Export results to Excel in reports/backtest_YYYY-MM-DD.xlsx",
     )
     args = parser.parse_args()
 
@@ -74,9 +74,9 @@ def main() -> None:
     print("═" * 65)
     print("  POLYMARKET PAPER TRADING BOT — BACKTESTING")
     print("═" * 65)
-    print(f"  Modo:             {args.mode}")
-    print(f"  Mercados:         {args.markets}")
-    print(f"  Balance inicial:  €{initial_balance:.2f}")
+    print(f"  Mode:             {args.mode}")
+    print(f"  Markets:          {args.markets}")
+    print(f"  Initial balance:  €{initial_balance:.2f}")
     print(f"  LLM:              {config.llm.provider} ({config.llm.model})")
     print()
 
@@ -86,12 +86,12 @@ def main() -> None:
             OllamaClient(config).verify_setup()
             print("  ✓ Ollama OK")
         except OllamaUnavailable as exc:
-            print(f"  ✗ Ollama no disponible: {exc}")
-            print("    Ejecuta 'ollama serve' primero.")
+            print(f"  ✗ Ollama not available: {exc}")
+            print("    Run 'ollama serve' first.")
             sys.exit(1)
 
-    print(f"  Iniciando backtesting ({args.markets} mercados)...")
-    print("  Esto puede tardar varios minutos. Ctrl+C para cancelar.")
+    print(f"  Starting backtesting ({args.markets} markets)...")
+    print("  This may take several minutes. Ctrl+C to cancel.")
     print()
 
     backtester = Backtester(
@@ -104,7 +104,7 @@ def main() -> None:
     try:
         result = backtester.run()
     except KeyboardInterrupt:
-        print("\n  Backtesting cancelado.")
+        print("\n  Backtesting cancelled.")
         sys.exit(0)
 
     result.print_summary()
@@ -114,7 +114,7 @@ def main() -> None:
 
 
 def _export_excel(result, config) -> None:
-    """Exporta los resultados a un Excel básico de backtesting."""
+    """Exports results to a basic backtesting Excel file."""
     from datetime import datetime, timezone
     from pathlib import Path as P
 
@@ -128,26 +128,26 @@ def _export_excel(result, config) -> None:
 
     wb = openpyxl.Workbook()
     ws_summary = wb.active
-    ws_summary.title = "Resumen Backtest"
+    ws_summary.title = "Backtest Summary"
 
-    # Cabecera
+    # Header
     header_font = Font(name="Arial", bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", start_color="1F3864", end_color="1F3864")
-    ws_summary["A1"] = "Parámetro"
-    ws_summary["B1"] = "Valor"
+    ws_summary["A1"] = "Parameter"
+    ws_summary["B1"] = "Value"
     for cell in ["A1", "B1"]:
         ws_summary[cell].font = header_font
         ws_summary[cell].fill = header_fill
 
     kpis = [
-        ("Modo", result.mode),
-        ("Mercados analizados", result.markets_analyzed),
-        ("Trades ejecutados", result.trades_executed),
+        ("Mode", result.mode),
+        ("Markets analyzed", result.markets_analyzed),
+        ("Trades executed", result.trades_executed),
         ("Win rate", f"{result.win_rate:.1%}"),
-        ("P&L total", f"€{result.total_pnl_eur:+.2f}"),
-        ("Balance inicial", f"€{result.initial_balance:.2f}"),
-        ("Balance final", f"€{result.final_balance:.2f}"),
-        ("Retorno total",
+        ("Total P&L", f"€{result.total_pnl_eur:+.2f}"),
+        ("Initial balance", f"€{result.initial_balance:.2f}"),
+        ("Final balance", f"€{result.final_balance:.2f}"),
+        ("Total return",
          f"{(result.final_balance - result.initial_balance) / result.initial_balance:+.2%}"),
         ("Max drawdown", f"{result.max_drawdown_pct:.2%}"),
         ("Sharpe ratio", f"{result.sharpe_ratio:.2f}"),
@@ -159,12 +159,12 @@ def _export_excel(result, config) -> None:
     ws_summary.column_dimensions["A"].width = 25
     ws_summary.column_dimensions["B"].width = 18
 
-    # Hoja de trades detallados
-    ws_trades = wb.create_sheet("Trades Detallados")
+    # Detailed trades sheet
+    ws_trades = wb.create_sheet("Detailed Trades")
     trade_headers = [
-        "Mercado", "YES ganó", "Lado", "Entrada", "Salida",
-        "Tamaño €", "P&L €", "P&L %",
-        "Confianza", "Edge", "Artículos", "Low info", "Rec. LLM",
+        "Market", "YES won", "Side", "Entry", "Exit",
+        "Size €", "P&L €", "P&L %",
+        "Confidence", "Edge", "Articles", "Low info", "LLM Rec.",
     ]
     for col_idx, header in enumerate(trade_headers, 1):
         cell = ws_trades.cell(row=1, column=col_idx, value=header)
@@ -180,7 +180,7 @@ def _export_excel(result, config) -> None:
         from openpyxl.utils import get_column_letter
         row_values = [
             t.market_question[:60],
-            "Sí" if t.resolved_yes else "No",
+            "Yes" if t.resolved_yes else "No",
             t.side.value if hasattr(t.side, "value") else str(t.side),
             t.entry_price_simulated,
             t.exit_price,
@@ -190,13 +190,13 @@ def _export_excel(result, config) -> None:
             t.confidence,
             t.edge,
             t.num_articles,
-            "Sí" if t.is_low_info else "No",
+            "Yes" if t.is_low_info else "No",
             t.llm_recommendation,
         ]
         for c_idx, value in enumerate(row_values, 1):
             ws_trades.cell(row=r_idx, column=c_idx, value=value)
 
-        # Colores P&L
+        # P&L colors
         pnl_cell = ws_trades.cell(row=r_idx, column=7)
         if (t.pnl_eur or 0) >= 0:
             pnl_cell.fill = PatternFill("solid", start_color="C6EFCE", end_color="C6EFCE")
@@ -204,7 +204,7 @@ def _export_excel(result, config) -> None:
             pnl_cell.fill = PatternFill("solid", start_color="FFC7CE", end_color="FFC7CE")
 
     wb.save(out_path)
-    print(f"  Excel exportado: {out_path}")
+    print(f"  Excel exported: {out_path}")
 
 
 if __name__ == "__main__":
