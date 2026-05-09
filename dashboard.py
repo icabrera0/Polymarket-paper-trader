@@ -1,5 +1,5 @@
 """
-Polymarket Paper Trading Bot Dashboard — v4.
+Polymarket Paper Trading Bot Dashboard
 Run: streamlit run dashboard.py
 """
 
@@ -16,14 +16,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-PROJECT_ROOT   = Path(__file__).resolve().parent
+PROJECT_ROOT    = Path(__file__).resolve().parent
 _OVERRIDES_PATH = PROJECT_ROOT / "data" / "overrides.json"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config_loader import load_config  # noqa: E402
-from src.database import Database  # noqa: E402
+from src.database import Database          # noqa: E402
 
 
 def _read_override(key: str, default):
@@ -46,11 +46,12 @@ def _write_override(key: str, value) -> None:
     except Exception:
         pass
 
-# ── Page config ──────────────────────────────────────────────────────────────
+
+# ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="PolyBot Terminal",
-    page_icon="▲",
+    page_title="Polymarket Portfolio",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -59,377 +60,552 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
 
-/* ── Fix ghost / greyed-out duplicate caused by time.sleep() before rerun ── */
-[data-stale="true"] { display: none !important; }
-.stAppRunningIndicator { display: none !important; }
+/* ── Ghost/stale state ── */
+[data-stale="true"]            { display: none !important; }
+.stAppRunningIndicator         { display: none !important; }
 [data-testid="stStatusWidget"] { display: none !important; }
 
-/* ── Variables ── */
+/* ══════════════════════════════════════════════════════
+   DESIGN TOKENS
+   ══════════════════════════════════════════════════════ */
 :root {
-    --bg:           #09090F;
-    --surface:      #0D0D1A;
-    --card:         #161622;
-    --card2:        #1C1C2E;
-    --border:       #262640;
-    --border2:      #3A3A60;
-    --primary:      #6366F1;
-    --primary-dim:  rgba(99,102,241,0.12);
-    --primary-glow: rgba(99,102,241,0.3);
-    --success:      #10B981;
-    --success-dim:  rgba(16,185,129,0.12);
-    --danger:       #F43F5E;
-    --danger-dim:   rgba(244,63,94,0.12);
-    --warn:         #F59E0B;
-    --text:         #F0F0FC;
-    --text2:        #A0A0C0;
-    --muted:        #6060A0;
-    --muted2:       #40405A;
+    /* Backgrounds */
+    --bg:            #F2F4F7;
+    --card:          #FFFFFF;
+    --card-hover:    #FAFBFC;
+    --border:        #E4E8EF;
+    --border2:       #CDD3DC;
+
+    /* Sidebar */
+    --sb-bg:         #141B2D;
+    --sb-surface:    #1C253D;
+    --sb-border:     #252F47;
+    --sb-text:       #C8D0E0;
+    --sb-muted:      #5A6580;
+    --sb-accent:     #4F7CF6;
+
+    /* Accent — electric blue */
+    --blue:          #2563EB;
+    --blue-mid:      rgba(37,99,235,0.15);
+    --blue-dim:      rgba(37,99,235,0.07);
+    --blue-bright:   #3B82F6;
+
+    /* Semantic */
+    --green:         #059669;
+    --green-dim:     rgba(5,150,105,0.08);
+    --green-mid:     rgba(5,150,105,0.18);
+    --red:           #E11D48;
+    --red-dim:       rgba(225,29,72,0.08);
+    --amber:         #D97706;
+    --amber-dim:     rgba(217,119,6,0.08);
+
+    /* Text */
+    --text:          #0F1623;
+    --text2:         #4A5568;
+    --muted:         #8A96A8;
+    --muted2:        #C5CDD8;
+
+    /* Shadows */
+    --shadow-sm:     0 1px 3px rgba(15,22,35,0.06), 0 1px 2px rgba(15,22,35,0.04);
+    --shadow-md:     0 4px 12px rgba(15,22,35,0.08), 0 2px 4px rgba(15,22,35,0.04);
+    --shadow-lg:     0 8px 24px rgba(15,22,35,0.10), 0 2px 8px rgba(15,22,35,0.06);
+    --radius:        12px;
+    --radius-sm:     8px;
 }
 
-/* ── Base ── */
-.stApp {
+/* ══════════════════════════════════════════════════════
+   BASE — force light theme on main area
+   ══════════════════════════════════════════════════════ */
+.stApp, .stApp > * {
     background: var(--bg) !important;
-    font-family: 'Inter', sans-serif;
-}
-* { box-sizing: border-box; }
-
-/* ── Headings ── */
-h1, h2, h3, h4 {
-    font-family: 'Inter', sans-serif !important;
     color: var(--text) !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.3px;
+    font-family: 'DM Sans', -apple-system, sans-serif !important;
 }
-h1 { font-size: 1.4rem !important; }
-h3 { font-size: 1.0rem !important; }
+section.main .block-container {
+    background: var(--bg) !important;
+    padding-top: 1.5rem !important;
+    max-width: 1280px;
+}
 
-/* ── Sidebar ── */
+/* Force all native text in main area to dark */
+.main p, .main span, .main label, .main div {
+    color: var(--text) !important;
+}
+.main h1, .main h2, .main h3, .main h4 {
+    color: var(--text) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 700 !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   SIDEBAR
+   ══════════════════════════════════════════════════════ */
 [data-testid="stSidebar"] {
-    background: var(--surface) !important;
-    border-right: 1px solid var(--border) !important;
+    background: var(--sb-bg) !important;
+    border-right: 1px solid var(--sb-border) !important;
 }
 [data-testid="stSidebar"] > div { padding-top: 0 !important; }
-
-/* ── Metrics ── */
-[data-testid="stMetric"] {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    position: relative;
-    overflow: hidden;
-    transition: border-color 0.2s;
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] div {
+    color: var(--sb-text) !important;
 }
-[data-testid="stMetric"]:hover { border-color: var(--border2); }
-[data-testid="stMetric"]::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: var(--primary);
-    opacity: 0.8;
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: var(--sb-text) !important;
+}
+/* Slider thumb */
+[data-testid="stSidebar"] [data-baseweb="slider"] [role="slider"] {
+    background: var(--sb-accent) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   NATIVE STREAMLIT METRICS → hidden, replaced by custom HTML
+   ══════════════════════════════════════════════════════ */
+[data-testid="stMetric"] {
+    background: var(--card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    padding: 1.1rem 1.2rem !important;
+    box-shadow: var(--shadow-sm) !important;
 }
 [data-testid="stMetricLabel"] {
-    font-family: 'Inter', sans-serif !important;
-    font-size: 0.7rem !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 0.68rem !important;
     font-weight: 500 !important;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.6px;
     color: var(--muted) !important;
 }
 [data-testid="stMetricValue"] {
-    font-family: 'Roboto Mono', monospace !important;
+    font-family: 'JetBrains Mono', monospace !important;
     font-size: 1.5rem !important;
     font-weight: 600 !important;
     color: var(--text) !important;
 }
 [data-testid="stMetricDelta"] {
-    font-family: 'Roboto Mono', monospace !important;
-    font-size: 0.75rem !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.72rem !important;
 }
 
-/* ── Buttons ── */
+/* ══════════════════════════════════════════════════════
+   BUTTONS
+   ══════════════════════════════════════════════════════ */
 .stButton > button {
-    font-family: 'Inter', sans-serif !important;
-    font-size: 0.8rem !important;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-    border: 1px solid var(--primary);
-    color: var(--primary) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    border: 1.5px solid var(--blue) !important;
+    color: var(--blue) !important;
     background: transparent !important;
-    border-radius: 6px;
-    padding: 0.45rem 1.2rem;
-    transition: all 0.2s ease;
+    border-radius: var(--radius-sm) !important;
+    padding: 0.45rem 1.3rem !important;
+    transition: all 0.18s ease !important;
     cursor: pointer;
+    letter-spacing: 0.1px;
 }
 .stButton > button:hover {
-    background: var(--primary) !important;
-    color: white !important;
-    box-shadow: 0 0 16px var(--primary-glow);
+    background: var(--blue-dim) !important;
+    color: var(--blue-bright) !important;
 }
 .stButton > button[kind="primary"] {
-    background: var(--primary) !important;
-    color: white !important;
-    border-color: var(--primary);
+    background: var(--blue) !important;
+    color: #FFFFFF !important;
+    border-color: var(--blue) !important;
 }
 .stButton > button[kind="primary"]:hover {
-    opacity: 0.88;
-    box-shadow: 0 0 16px var(--primary-glow);
+    background: var(--blue-bright) !important;
+    box-shadow: 0 4px 12px var(--blue-mid) !important;
 }
 
-/* ── Tabs ── */
+/* ══════════════════════════════════════════════════════
+   TABS
+   ══════════════════════════════════════════════════════ */
 [data-testid="stTabs"] [role="tablist"] {
-    border-bottom: 1px solid var(--border) !important;
-    gap: 0;
-}
-[data-testid="stTabs"] [role="tab"] {
-    font-family: 'Inter', sans-serif !important;
-    font-size: 0.78rem !important;
-    font-weight: 500;
-    letter-spacing: 0.2px;
-    color: var(--muted) !important;
-    padding: 0.6rem 1.1rem !important;
-    border-radius: 0 !important;
-    border-bottom: 2px solid transparent !important;
-    transition: all 0.2s;
-}
-[data-testid="stTabs"] [role="tab"]:hover { color: var(--text2) !important; }
-[data-testid="stTabs"] [aria-selected="true"] {
-    color: var(--primary) !important;
-    border-bottom-color: var(--primary) !important;
-    background: transparent !important;
-}
-
-/* ── Divider ── */
-hr { border: none; border-top: 1px solid var(--border) !important; margin: 1.2rem 0; }
-
-/* ── DataFrames / Tables ── */
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-}
-iframe { background: var(--card) !important; }
-
-/* ── Sliders ── */
-[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
-    background: var(--primary) !important;
-}
-
-/* ── Code block ── */
-.stCodeBlock, [data-testid="stCode"] {
     background: var(--card) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 6px;
-    font-family: 'Roboto Mono', monospace !important;
+    border-radius: var(--radius) !important;
+    padding: 4px !important;
+    gap: 2px !important;
+    margin-bottom: 1.2rem !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 0.80rem !important;
+    font-weight: 500 !important;
+    color: var(--muted) !important;
+    padding: 0.5rem 1.1rem !important;
+    border-radius: var(--radius-sm) !important;
+    border: none !important;
+    transition: all 0.18s ease !important;
+    background: transparent !important;
+}
+[data-testid="stTabs"] [role="tab"]:hover {
+    color: var(--text2) !important;
+    background: var(--bg) !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+    background: var(--blue) !important;
+    color: #FFFFFF !important;
+    font-weight: 600 !important;
+    box-shadow: var(--shadow-sm) !important;
 }
 
-/* ── Info / warning banners ── */
-[data-testid="stAlert"] {
-    border-radius: 6px;
-    border-left: 3px solid var(--primary) !important;
-    background: var(--primary-dim) !important;
-    font-family: 'Inter', sans-serif;
-}
-
-/* ── Selectbox ── */
-[data-testid="stSelectbox"] [data-baseweb="select"] {
+/* ══════════════════════════════════════════════════════
+   INPUTS & FORMS
+   ══════════════════════════════════════════════════════ */
+.main [data-baseweb="input"] input,
+.main [data-baseweb="textarea"] textarea,
+.main [data-testid="stNumberInput"] input {
     background: var(--card) !important;
-    border-color: var(--border) !important;
-}
-
-/* ── Number input ── */
-[data-testid="stNumberInput"] input {
-    background: var(--card) !important;
-    border-color: var(--border) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
     color: var(--text) !important;
-    font-family: 'Roboto Mono', monospace !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+.main [data-testid="stSelectbox"] [data-baseweb="select"] {
+    background: var(--card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
 }
 
-/* ── Radio ── */
-[data-testid="stRadio"] label { font-family: 'Inter', sans-serif; font-size: 0.88rem; }
+/* ══════════════════════════════════════════════════════
+   MISC NATIVE
+   ══════════════════════════════════════════════════════ */
+hr {
+    border: none !important;
+    border-top: 1px solid var(--border) !important;
+    margin: 1.25rem 0 !important;
+}
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    overflow: hidden !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+[data-testid="stAlert"] {
+    background: var(--blue-dim) !important;
+    border-radius: var(--radius-sm) !important;
+    border-left: 3px solid var(--blue) !important;
+    color: var(--text) !important;
+}
+[data-testid="stAlert"] p { color: var(--text) !important; }
+.main [data-testid="stRadio"] label { color: var(--text2) !important; }
+.main [data-testid="stCaption"],
+.main [data-testid="stCaptionContainer"],
+.main small { color: var(--muted) !important; }
 
-/* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--surface); }
-::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--muted2); }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
 
-/* ── Custom components ── */
+/* ══════════════════════════════════════════════════════
+   CUSTOM COMPONENTS
+   ══════════════════════════════════════════════════════ */
 
-/* Card */
-.card {
+/* ── Portfolio hero ── */
+.portfolio-hero {
+    background: linear-gradient(130deg, #FFFFFF 0%, #EEF4FF 100%);
+    border: 1px solid #D6E4FF;
+    border-radius: 16px;
+    padding: 1.8rem 2rem 1.6rem;
+    margin-bottom: 1.2rem;
+    box-shadow: var(--shadow-md);
+    position: relative;
+    overflow: hidden;
+}
+.portfolio-hero::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 180px; height: 180px;
+    background: radial-gradient(circle, rgba(37,99,235,0.07) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.hero-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: #7A90B4;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    margin-bottom: 0.4rem;
+}
+.hero-balance {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 3rem;
+    font-weight: 600;
+    color: #0F1623;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    margin-bottom: 0.45rem;
+}
+.hero-pnl {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.92rem;
+    font-weight: 500;
+}
+.hero-pnl.pos { color: #059669; }
+.hero-pnl.neg { color: #E11D48; }
+.hero-initial {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    color: #8A96A8;
+    margin-top: 0.3rem;
+}
+
+/* ── Stat cards row ── */
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1.2rem;
+}
+.stat-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.2rem 1.3rem;
-    margin-bottom: 1rem;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    border-radius: var(--radius);
+    padding: 1rem 1.1rem;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.18s;
 }
-.card:hover {
-    border-color: var(--border2);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+.stat-card:hover { box-shadow: var(--shadow-md); }
+.stat-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.67rem;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.35rem;
+}
+.stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.1;
+}
+.stat-sub {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.70rem;
+    color: var(--muted);
+    margin-top: 0.25rem;
+}
+.stat-sub.pos { color: var(--green); }
+.stat-sub.neg { color: var(--red); }
+
+/* ── Section header ── */
+.sh {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
-/* Status dot */
+/* ── Live dot ── */
 .dot {
     display: inline-block;
     width: 6px; height: 6px;
     border-radius: 50%;
-    margin-right: 5px;
     vertical-align: middle;
+    margin-right: 5px;
 }
-.dot-live { background: var(--success); box-shadow: 0 0 5px var(--success); animation: pulse 2s infinite; }
+.dot-live { background: var(--green); box-shadow: 0 0 5px var(--green); animation: pulse 2s infinite; }
 .dot-off  { background: var(--muted); }
 @keyframes pulse {
-    0%,100% { opacity: 1; }
-    50%      { opacity: 0.3; }
+    0%,100% { opacity: 1; box-shadow: 0 0 5px var(--green); }
+    50%      { opacity: 0.4; box-shadow: 0 0 2px var(--green); }
 }
 
-/* Badge pill */
+/* ── Holding card (position row) ── */
+.holding {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.6rem;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.18s, border-color 0.18s;
+    position: relative;
+    overflow: hidden;
+}
+.holding::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--border);
+}
+.holding.side-yes::before { background: var(--blue); }
+.holding.side-no::before  { background: var(--red); }
+.holding:hover {
+    box-shadow: var(--shadow-md);
+    border-color: var(--border2);
+}
+.holding-name {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.3rem;
+    line-height: 1.4;
+}
+.holding-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+}
+.holding-meta b { color: var(--text2); font-weight: 500; }
+.holding-pnl {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 1.1rem;
+    text-align: right;
+    line-height: 1.1;
+}
+.holding-pnl.pos { color: var(--green); }
+.holding-pnl.neg { color: var(--red); }
+.holding-pnl.neu { color: var(--muted); }
+.holding-pct {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-align: right;
+}
+.holding-pct.pos { color: var(--green); }
+.holding-pct.neg { color: var(--red); }
+
+/* ── Badge pill ── */
 .badge {
     display: inline-flex;
     align-items: center;
     padding: 2px 9px;
     border-radius: 20px;
-    font-family: 'Inter', sans-serif;
-    font-size: 0.68rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.3px;
 }
-.badge-open  { background: var(--success-dim); color: var(--success); border: 1px solid rgba(16,185,129,0.3); }
-.badge-empty { background: rgba(96,96,160,0.1); color: var(--muted); border: 1px solid rgba(96,96,160,0.2); }
-.badge-warn  { background: rgba(245,158,11,0.1); color: var(--warn); border: 1px solid rgba(245,158,11,0.25); }
+.badge-yes  { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(37,99,235,0.2); }
+.badge-no   { background: var(--red-dim);  color: var(--red);  border: 1px solid rgba(225,29,72,0.2); }
+.badge-open { background: var(--green-dim); color: var(--green); border: 1px solid rgba(5,150,105,0.2); }
+.badge-empty{ background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 
-/* Position card — left accent border */
-.pos-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--border);
-    border-radius: 10px;
-    padding: 1.2rem 1.3rem;
-    margin-bottom: 0.9rem;
-    transition: border-color 0.2s, box-shadow 0.2s;
-}
-.pos-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
-.pos-card.side-yes { border-left-color: var(--primary); }
-.pos-card.side-no  { border-left-color: var(--danger); }
-
-.pos-title {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.92rem;
-    font-weight: 500;
-    color: var(--text);
-    line-height: 1.45;
-    margin-bottom: 0.4rem;
-}
-.pos-meta {
-    font-family: 'Roboto Mono', monospace;
-    font-size: 0.71rem;
-    color: var(--muted);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.7rem;
-    margin-top: 0.3rem;
-}
-.pos-meta span { white-space: nowrap; }
-.pos-pnl {
-    font-family: 'Roboto Mono', monospace;
-    font-weight: 600;
-    font-size: 1.2rem;
-    text-align: right;
-}
-.pos-pnl.pos { color: var(--success); }
-.pos-pnl.neg { color: var(--danger); }
-.pos-pnl.neu { color: var(--muted); }
-
-.tag-yes {
-    background: var(--primary-dim);
-    color: var(--primary);
-    font-family: 'Inter', sans-serif;
-    font-size: 0.65rem;
-    font-weight: 700;
-    letter-spacing: 0.4px;
-    padding: 1px 7px;
-    border-radius: 4px;
-    border: 1px solid rgba(99,102,241,0.35);
-}
-.tag-no {
-    background: var(--danger-dim);
-    color: var(--danger);
-    font-family: 'Inter', sans-serif;
-    font-size: 0.65rem;
-    font-weight: 700;
-    letter-spacing: 0.4px;
-    padding: 1px 7px;
-    border-radius: 4px;
-    border: 1px solid rgba(244,63,94,0.35);
-}
-
-/* Progress bar (SL → TP) */
-.progress-wrap { margin: 0.8rem 0 0.2rem; }
-.progress-track {
+/* ── Price track ── */
+.price-track-wrap { margin: 0.7rem 0 0.3rem; }
+.price-track {
     position: relative;
-    height: 4px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 2px;
+    height: 3px;
+    background: var(--bg);
+    border-radius: 3px;
+    border: 1px solid var(--border);
 }
-.progress-fill {
+.price-fill {
     position: absolute;
     top: 0; height: 100%;
-    border-radius: 2px;
-    transition: width 0.5s ease;
+    border-radius: 3px;
 }
-.pip {
+.price-pip {
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%);
     border-radius: 50%;
 }
-.progress-labels {
+.price-labels {
     display: flex;
     justify-content: space-between;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 0.66rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.60rem;
     color: var(--muted);
     margin-top: 4px;
 }
 
-/* Section header */
-.section-header {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.7rem;
+/* ── Sidebar components ── */
+.sb-logo-wrap {
+    padding: 1.4rem 1rem 1rem;
+    border-bottom: 1px solid var(--sb-border);
+}
+.sb-portfolio-wrap {
+    padding: 1rem 1rem 0.8rem;
+    border-bottom: 1px solid var(--sb-border);
+    background: var(--sb-surface);
+}
+.sb-section {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.58rem;
     font-weight: 600;
-    letter-spacing: 1px;
     text-transform: uppercase;
-    color: var(--muted);
-    padding: 0.4rem 0;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 0.9rem;
+    letter-spacing: 1px;
+    color: var(--sb-muted) !important;
+    padding: 0.8rem 1rem 0.25rem;
+}
+.sb-ctrl {
+    padding: 0 1rem 0.3rem;
+}
+.sb-source {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.78rem;
+    padding: 3px 1rem;
+}
+.sb-kv {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.70rem;
+    padding: 0 1rem 0.2rem;
 }
 
-/* Gain/loss inline */
-.gain { color: var(--success); font-weight: 600; }
-.loss { color: var(--danger); font-weight: 600; }
-.mono { font-family: 'Roboto Mono', monospace; }
-
-/* Sidebar section label */
-.sb-label {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.63rem;
-    font-weight: 600;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    color: var(--muted2);
-    padding: 0.7rem 0 0.25rem;
+/* ── Page header ── */
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.4rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+.page-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text);
+}
+.page-sub {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 1px;
+}
+.page-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-align: right;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def get_config():
@@ -438,8 +614,6 @@ def get_config():
 
 @st.cache_data(ttl=10)
 def fetch_live_prices(_config, token_ids: tuple[str, ...]) -> dict[str, float]:
-    """Fetch current midpoint prices from the CLOB API for all open position tokens.
-    Cached 10 s. Returns {token_id: current_price}."""
     if not token_ids:
         return {}
     try:
@@ -454,137 +628,190 @@ def get_db(config) -> Database:
 
 
 def fmt_eur(v: float) -> str:
-    sign = "+" if v > 0 else ""
-    return f"{sign}€{v:.2f}"
+    return f"{'+'if v>0 else ''}€{v:.2f}"
 
 
 def fmt_pct(v: float) -> str:
     return f"{'+'if v>0 else ''}{v:.2%}"
 
 
-def pnl_color_class(v: float) -> str:
-    if v > 0: return "pos"
-    if v < 0: return "neg"
-    return "neu"
+def pnl_cls(v: float) -> str:
+    return "pos" if v > 0 else ("neg" if v < 0 else "neu")
+
+
+def _stat_card(label: str, value: str, sub: str = "", sub_cls: str = "neutral") -> str:
+    sub_html = (
+        f'<div class="stat-sub {sub_cls}">{sub}</div>' if sub else ""
+    )
+    return (
+        f'<div class="stat-card">'
+        f'<div class="stat-label">{label}</div>'
+        f'<div class="stat-value">{value}</div>'
+        f'{sub_html}'
+        f'</div>'
+    )
+
+
+def _sh(title: str, extra: str = "") -> str:
+    return (
+        f'<div class="sh">'
+        f'<span>{title}</span>'
+        f'<span style="font-weight:400;font-size:0.65rem;">{extra}</span>'
+        f'</div>'
+    )
 
 
 def _chart_style(fig: go.Figure, height: int = 280) -> None:
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#6060A0", family="Roboto Mono", size=11),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", showline=False, title=""),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.04)", showline=False),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        font=dict(color="#8A96A8", family="DM Sans", size=11),
+        xaxis=dict(
+            gridcolor="rgba(15,22,35,0.05)",
+            showline=False, title="",
+            tickcolor="#C5CDD8", tickfont=dict(family="JetBrains Mono", size=10),
+        ),
+        yaxis=dict(
+            gridcolor="rgba(15,22,35,0.05)",
+            showline=False,
+            tickfont=dict(family="JetBrains Mono", size=10),
+        ),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=10, family="DM Sans"),
+        ),
         height=height,
-        margin=dict(l=0, r=8, t=28, b=0),
+        margin=dict(l=4, r=4, t=28, b=4),
     )
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-def render_sidebar(config) -> tuple[int, int]:
+def render_sidebar(config, history: list, open_pos: list) -> tuple[int, int]:
     with st.sidebar:
-        # Logo / brand
+        # Brand
         st.markdown("""
-        <div style="padding: 1.4rem 0.8rem 0.8rem; border-bottom: 1px solid #262640;">
-            <div style="font-family:'Inter',sans-serif; font-size:1.1rem; font-weight:700;
-                        color:#6366F1; letter-spacing:1px;">
-                POLYBOT
-            </div>
-            <div style="font-family:'Roboto Mono',monospace; font-size:0.62rem;
-                        color:#40405A; margin-top:3px; letter-spacing:0.8px;">
-                PAPER TRADING TERMINAL
+        <div class="sb-logo-wrap">
+            <div style="display:flex;align-items:center;gap:0.5rem;">
+                <div style="width:30px;height:30px;background:#2563EB;border-radius:8px;
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:0.9rem;">📈</div>
+                <div>
+                    <div style="font-family:'DM Sans',sans-serif;font-size:0.95rem;
+                                font-weight:700;color:#E2E8F0;">PolyBot</div>
+                    <div style="font-family:'DM Sans',sans-serif;font-size:0.60rem;
+                                color:#5A6580;margin-top:1px;letter-spacing:0.5px;">
+                        Paper Trading
+                    </div>
+                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown('<div class="sb-label">Auto-refresh</div>', unsafe_allow_html=True)
-        refresh = st.slider("Seconds", 5, 120, 10, step=5,
-                            key="refresh_slider", label_visibility="collapsed")
+        # Portfolio summary
+        bal = float(history[-1]["balance_eur"]) if history else config.paper_trading.initial_balance_eur
+        initial = config.paper_trading.initial_balance_eur
+        pnl = bal - initial
+        pnl_sign = "+" if pnl >= 0 else ""
+        pnl_color = "#059669" if pnl >= 0 else "#E11D48"
 
-        st.markdown('<div class="sb-label">Position Limit</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="sb-portfolio-wrap">
+            <div style="font-family:'DM Sans',sans-serif;font-size:0.62rem;
+                        font-weight:500;color:#5A6580;text-transform:uppercase;
+                        letter-spacing:0.6px;margin-bottom:0.4rem;">Portfolio value</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:1.5rem;
+                        font-weight:600;color:#E2E8F0;letter-spacing:-0.5px;
+                        line-height:1;">€{bal:,.2f}</div>
+            <div style="font-family:'DM Sans',sans-serif;font-size:0.78rem;
+                        font-weight:500;color:{pnl_color};margin-top:0.3rem;">
+                {pnl_sign}€{pnl:.2f} all time
+            </div>
+            <div style="margin-top:0.6rem;display:flex;gap:1rem;">
+                <div style="font-family:'DM Sans',sans-serif;font-size:0.70rem;color:#5A6580;">
+                    <span style="color:#8A96A8">Open</span>&nbsp;
+                    <b style="color:#C8D0E0">{len(open_pos)}/{config.risk.max_simultaneous_positions}</b>
+                </div>
+                <div style="font-family:'DM Sans',sans-serif;font-size:0.70rem;color:#5A6580;">
+                    <span style="color:#8A96A8">Initial</span>&nbsp;
+                    <b style="color:#C8D0E0">€{initial:.0f}</b>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Controls
+        st.markdown('<div class="sb-section">Settings</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sb-ctrl">', unsafe_allow_html=True)
+
+        refresh = st.slider("↻ Refresh (s)", 5, 120, 10, step=5, key="refresh_slider")
+
         if "max_pos_slider" not in st.session_state:
             st.session_state["max_pos_slider"] = _read_override(
-                "max_simultaneous_positions",
-                config.risk.max_simultaneous_positions,
+                "max_simultaneous_positions", config.risk.max_simultaneous_positions
             )
         max_pos = st.slider(
-            "Max simultaneous positions",
-            min_value=1, max_value=10,
-            step=1,
+            "⚖ Max positions", min_value=1, max_value=10, step=1,
             key="max_pos_slider",
-            label_visibility="collapsed",
         )
         if max_pos != config.risk.max_simultaneous_positions:
             config.risk.max_simultaneous_positions = max_pos
             _write_override("max_simultaneous_positions", max_pos)
-            st.success(f"Limit updated to {max_pos}")
         else:
             config.risk.max_simultaneous_positions = max_pos
 
-        st.markdown('<div class="sb-label">LLM Workers</div>', unsafe_allow_html=True)
         if "llm_workers_slider" not in st.session_state:
             st.session_state["llm_workers_slider"] = _read_override(
-                "llm_parallelism",
-                getattr(config.llm, "llm_parallelism", 1),
+                "llm_parallelism", getattr(config.llm, "llm_parallelism", 1)
             )
         llm_workers = st.slider(
-            "LLM Workers",
-            min_value=1, max_value=4,
-            step=1,
+            "⚡ LLM workers", min_value=1, max_value=4, step=1,
             key="llm_workers_slider",
-            label_visibility="collapsed",
         )
         _write_override("llm_parallelism", llm_workers)
         if llm_workers > 1:
+            st.caption(f"⚠ Needs OLLAMA_NUM_PARALLEL={llm_workers}")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # News sources
+        st.markdown('<div class="sb-section">News Sources</div>', unsafe_allow_html=True)
+        for name, enabled in [
+            ("GDELT", config.news.gdelt.enabled),
+            ("NewsAPI", config.news.newsapi.enabled),
+            ("Telegram", config.news.telegram.enabled),
+        ]:
+            color = "#059669" if enabled else "#5A6580"
+            dot = "dot-live" if enabled else "dot-off"
             st.markdown(
-                '<div style="font-family:\'Inter\',sans-serif;font-size:0.70rem;'
-                'color:#F59E0B;padding:2px 0 4px 0;">'
-                f'⚠ Requires OLLAMA_NUM_PARALLEL={llm_workers}</div>',
+                f'<div class="sb-source">'
+                f'<span class="dot {dot}" style="background:{color};box-shadow:{"0 0 4px "+color if enabled else "none"};"></span>'
+                f'<span style="color:{color};font-family:\'DM Sans\',sans-serif;font-size:0.78rem;">{name}</span>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-        st.markdown('<div class="sb-label">News Sources</div>', unsafe_allow_html=True)
-        sources = []
-        if config.news.gdelt.enabled:     sources.append(("GDELT", True))
-        if config.news.newsapi.enabled:   sources.append(("NewsAPI", True))
-        if config.news.telegram.enabled:  sources.append(("Telegram", True))
-        if not sources:                   sources.append(("None active", False))
-
-        for name, active in sources:
-            dot_cls = "dot-live" if active else "dot-off"
-            color = "#10B981" if active else "#6060A0"
+        # Risk params
+        st.markdown('<div class="sb-section">Risk Parameters</div>', unsafe_allow_html=True)
+        for label, val, color in [
+            ("Stop-loss",  f"{config.risk.stop_loss_pct:.0%}",   "#E11D48"),
+            ("Take-profit",f"{config.risk.take_profit_pct:.0%}", "#059669"),
+            ("Max DD",     f"{config.risk.max_drawdown_pct:.0%}","#D97706"),
+            ("Max size",   f"{config.risk.max_position_size_pct:.0%}","#4F7CF6"),
+        ]:
             st.markdown(
-                f'<div style="font-family:\'Inter\',sans-serif; font-size:0.82rem; '
-                f'color:{color}; padding:2px 0;">'
-                f'<span class="dot {dot_cls}"></span>{name}</div>',
+                f'<div class="sb-kv">'
+                f'<span style="color:#5A6580;font-family:\'DM Sans\',sans-serif;font-size:0.72rem;">{label}</span>'
+                f'<span style="color:{color};font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;font-weight:600;">{val}</span>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-        st.markdown('<div class="sb-label">Risk Config</div>', unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style="font-family:'Roboto Mono',monospace; font-size:0.72rem;
-                    color:#A0A0C0; background:#161622;
-                    border:1px solid #262640;
-                    border-radius:8px; padding:0.75rem 0.85rem; line-height:2;">
-            <span style="color:#6060A0">SL&nbsp;&nbsp;</span>
-            <span style="color:#F43F5E">{config.risk.stop_loss_pct:.0%}</span>
-            &nbsp;&nbsp;
-            <span style="color:#6060A0">TP&nbsp;&nbsp;</span>
-            <span style="color:#10B981">{config.risk.take_profit_pct:.0%}</span><br>
-            <span style="color:#6060A0">DD max&nbsp;</span>
-            <span style="color:#F59E0B">{config.risk.max_drawdown_pct:.0%}</span><br>
-            <span style="color:#6060A0">pos size</span>
-            <span style="color:#6366F1">{config.risk.max_position_size_pct:.0%}</span>
-            <span style="color:#40405A"> of balance</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown('<div class="sb-label">System</div>', unsafe_allow_html=True)
+        # System
+        st.markdown('<div class="sb-section">System</div>', unsafe_allow_html=True)
         st.markdown(
-            f'<div style="font-family:\'Roboto Mono\',monospace; font-size:0.68rem; '
-            f'color:#40405A; line-height:1.9;">'
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.65rem;'
+            f'color:#5A6580;line-height:1.9;padding:0 1rem 0.5rem;">'
             f'v{config.app.version}<br>'
             f'{config.llm.provider} / {config.llm.model.split(":")[0]}</div>',
             unsafe_allow_html=True,
@@ -596,10 +823,10 @@ def render_sidebar(config) -> tuple[int, int]:
 # ── Overview Tab ──────────────────────────────────────────────────────────────
 
 def render_overview(db: Database, config) -> None:
-    history = db.get_balance_history()
-    open_pos = db.get_open_positions()
+    history    = db.get_balance_history()
+    open_pos   = db.get_open_positions()
     all_trades = db.get_all_trades()
-    closed = [t for t in all_trades if t.status.value == "CLOSED"]
+    closed     = [t for t in all_trades if t.status.value == "CLOSED"]
 
     bal      = float(history[-1]["balance_eur"]) if history else config.paper_trading.initial_balance_eur
     peak     = float(history[-1]["peak_balance"]) if history else bal
@@ -610,116 +837,131 @@ def render_overview(db: Database, config) -> None:
     winners  = [t for t in closed if (t.pnl_eur or 0) > 0]
     win_rate = len(winners) / len(closed) if closed else 0.0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Balance", f"€{bal:.2f}",
-              delta=f"{'+' if pnl >= 0 else ''}€{pnl:.2f}",
-              delta_color="normal" if pnl >= 0 else "inverse")
-    c2.metric("Total P&L", f"{'+'if pnl>=0 else ''}€{pnl:.2f}",
-              delta=fmt_pct(pnl_pct),
-              delta_color="normal" if pnl >= 0 else "inverse")
-    c3.metric("Drawdown", f"{drawdown:.2%}",
-              delta=f"max {config.risk.max_drawdown_pct:.0%}",
-              delta_color="off")
-    c4.metric("Positions", f"{len(open_pos)} / {config.risk.max_simultaneous_positions}",
-              delta="open")
-    c5.metric("Win Rate", f"{win_rate:.1%}",
-              delta=f"{len(closed)} closed",
-              delta_color="off")
+    # ── Portfolio hero ────────────────────────────────────────────────────────
+    pnl_sign = "+" if pnl >= 0 else ""
+    hero_cls = "pos" if pnl >= 0 else "neg"
+    pnl_arrow = "↑" if pnl >= 0 else "↓"
+    st.markdown(f"""
+    <div class="portfolio-hero">
+        <div class="hero-label">Total Portfolio Value</div>
+        <div class="hero-balance">€{bal:,.2f}</div>
+        <div class="hero-pnl {hero_cls}">
+            {pnl_arrow} {pnl_sign}€{pnl:.2f} &nbsp;({fmt_pct(pnl_pct)}) since inception
+        </div>
+        <div class="hero-initial">Started at €{initial:.2f} · Peak €{peak:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.divider()
+    # ── Quick stats ───────────────────────────────────────────────────────────
+    dd_sub_cls = "neg" if drawdown > config.risk.max_drawdown_pct * 0.7 else "neutral"
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Win Rate", f"{win_rate:.1%}", f"{len(winners)}/{len(closed)} trades")
+        + _stat_card("Drawdown", f"{drawdown:.2%}", f"limit {config.risk.max_drawdown_pct:.0%}", dd_sub_cls)
+        + _stat_card("Positions", f"{len(open_pos)} / {config.risk.max_simultaneous_positions}", "open now")
+        + _stat_card("Closed", str(len(closed)), "all time")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
     if len(history) < 2:
-        st.info("No history yet. Start the bot: `python main.py`")
+        st.info("No history yet — start the bot: `python main.py`")
         return
 
     df = pd.DataFrame(history)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-    col_l, col_r = st.columns([3, 2])
+    # ── Balance chart (full width) ────────────────────────────────────────────
+    st.markdown(_sh("Portfolio Performance"), unsafe_allow_html=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["balance_eur"],
+        mode="lines", name="Balance",
+        line=dict(color="#2563EB", width=2.5, shape="spline", smoothing=0.3),
+        fill="tozeroy",
+        fillcolor="rgba(37,99,235,0.06)",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["timestamp"], y=df["peak_balance"],
+        mode="lines", name="Peak",
+        line=dict(color="#CBD5E1", width=1, dash="dot"),
+    ))
+    fig.add_hline(y=initial, line_dash="dash", line_color="#E4E8EF",
+                  annotation_text="Start", annotation_font_color="#8A96A8",
+                  annotation_font_size=10)
+    _chart_style(fig, height=260)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Drawdown + P&L bars ───────────────────────────────────────────────────
+    col_l, col_r = st.columns([2, 3])
 
     with col_l:
-        st.markdown('<div class="section-header">Balance curve</div>', unsafe_allow_html=True)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["balance_eur"],
-            mode="lines", name="Balance",
-            line=dict(color="#6366F1", width=2.5),
-            fill="tozeroy",
-            fillcolor="rgba(99,102,241,0.06)",
-        ))
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["peak_balance"],
-            mode="lines", name="Peak",
-            line=dict(color="#6060A0", width=1, dash="dot"),
-        ))
-        fig.add_hline(y=initial, line_dash="dash", line_color="#2A2A42",
-                      annotation_text="Initial",
-                      annotation_font_color="#6060A0", annotation_font_size=10)
-        _chart_style(fig, height=270)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_r:
-        st.markdown('<div class="section-header">Drawdown</div>', unsafe_allow_html=True)
+        st.markdown(_sh("Drawdown"), unsafe_allow_html=True)
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(
             x=df["timestamp"], y=df["drawdown_pct"] * 100,
             mode="lines",
-            line=dict(color="#F43F5E", width=1.5),
+            line=dict(color="#E11D48", width=1.5, shape="spline", smoothing=0.3),
             fill="tozeroy",
-            fillcolor="rgba(244,63,94,0.06)",
+            fillcolor="rgba(225,29,72,0.06)",
         ))
         fig2.add_hline(
             y=config.risk.max_drawdown_pct * 100,
-            line_dash="dash", line_color="#F59E0B",
+            line_dash="dash", line_color="#FCD34D",
             annotation_text=f"Limit {config.risk.max_drawdown_pct:.0%}",
-            annotation_font_color="#F59E0B", annotation_font_size=10,
+            annotation_font_color="#D97706", annotation_font_size=10,
         )
-        _chart_style(fig2, height=270)
+        _chart_style(fig2, height=200)
         st.plotly_chart(fig2, use_container_width=True)
 
-    if closed:
-        st.markdown('<div class="section-header">P&L per trade (last 20)</div>', unsafe_allow_html=True)
-        pnls   = [(t.pnl_eur or 0) for t in closed[-20:]]
-        colors = ["#10B981" if p >= 0 else "#F43F5E" for p in pnls]
-        fig3   = go.Figure(go.Bar(
-            x=list(range(1, len(pnls)+1)), y=pnls,
-            marker_color=colors,
-            marker_line_width=0,
-            text=[f"€{p:+.2f}" for p in pnls],
-            textposition="outside",
-            textfont=dict(size=8, color="#6060A0"),
-        ))
-        _chart_style(fig3, height=190)
-        st.plotly_chart(fig3, use_container_width=True)
+    with col_r:
+        if closed:
+            st.markdown(_sh("P&L per Trade", "last 20"), unsafe_allow_html=True)
+            pnls   = [(t.pnl_eur or 0) for t in closed[-20:]]
+            colors = ["#059669" if p >= 0 else "#E11D48" for p in pnls]
+            fig3   = go.Figure(go.Bar(
+                x=list(range(1, len(pnls)+1)), y=pnls,
+                marker_color=colors,
+                marker_line_width=0,
+                marker_cornerradius=3,
+                text=[f"€{p:+.2f}" for p in pnls],
+                textposition="outside",
+                textfont=dict(size=8, color="#8A96A8"),
+            ))
+            _chart_style(fig3, height=200)
+            st.plotly_chart(fig3, use_container_width=True)
 
 
-# ── Position progress bar ─────────────────────────────────────────────────────
+# ── Price track ───────────────────────────────────────────────────────────────
 
-def _progress_html(entry: float, sl: float, tp: float, current: float,
-                   is_live: bool = False) -> str:
+def _price_track(entry: float, sl: float, tp: float, current: float,
+                 is_live: bool = False) -> str:
     span = tp - sl
     if span <= 0:
         return ""
     p_entry   = max(0.0, min(1.0, (entry   - sl) / span)) * 100
     p_current = max(0.0, min(1.0, (current - sl) / span)) * 100
     is_up     = current >= entry
-    fc        = "#10B981" if is_up else "#F43F5E"
+    fc        = "#059669" if is_up else "#E11D48"
     left      = min(p_entry, p_current)
     width     = abs(p_current - p_entry)
-    price_color = "#10B981" if is_live else "#40405A"
-    price_dot   = "&#9679;" if is_live else "&#9711;"
-    price_note  = "" if is_live else " (entry)"
+    cur_color = "#2563EB" if is_live else "#8A96A8"
+    cur_label = f"◉ {current:.4f}" if is_live else f"○ {current:.4f} (entry)"
     return (
-        '<div class="progress-wrap">'
-        '<div class="progress-track">'
-        f'<div class="progress-fill" style="left:{left:.1f}%;width:{width:.1f}%;background:{fc}55;"></div>'
-        f'<div class="pip" style="left:2px;width:7px;height:7px;background:#F43F5E;"></div>'
-        f'<div class="pip" style="left:{p_entry:.1f}%;width:3px;height:12px;border-radius:2px;background:#6060A0;"></div>'
-        f'<div class="pip" style="left:{p_current:.1f}%;width:4px;height:14px;border-radius:2px;background:{fc};"></div>'
-        f'<div class="pip" style="right:2px;left:auto;transform:translate(0,-50%);width:7px;height:7px;background:#10B981;"></div>'
+        '<div class="price-track-wrap">'
+        '<div class="price-track">'
+        f'<div class="price-fill" style="left:{left:.1f}%;width:{width:.1f}%;background:{fc}44;"></div>'
+        f'<div class="price-pip" style="left:2%;width:8px;height:8px;background:#E11D48;border-radius:2px;"></div>'
+        f'<div class="price-pip" style="left:{p_entry:.1f}%;width:2px;height:10px;background:#8A96A8;border-radius:1px;"></div>'
+        f'<div class="price-pip" style="left:{p_current:.1f}%;width:3px;height:12px;background:{fc};border-radius:1px;"></div>'
+        f'<div class="price-pip" style="right:2%;left:auto;transform:translate(0,-50%);width:8px;height:8px;background:#059669;border-radius:2px;"></div>'
         '</div>'
-        f'<div class="progress-labels"><span style="color:#F43F5E">SL {sl:.4f}</span><span>entry {entry:.4f}</span><span style="color:#10B981">TP {tp:.4f}</span></div>'
-        f'<div style="text-align:center;margin-top:3px;font-family:\'Roboto Mono\',monospace;font-size:0.72rem;font-weight:500;color:{price_color};">{price_dot} Current: {current:.4f}{price_note}</div>'
+        f'<div class="price-labels">'
+        f'<span style="color:#E11D48">SL {sl:.4f}</span>'
+        f'<span style="color:{cur_color};font-weight:500;">{cur_label}</span>'
+        f'<span style="color:#059669">TP {tp:.4f}</span>'
+        f'</div>'
         '</div>'
     )
 
@@ -729,15 +971,16 @@ def _progress_html(entry: float, sl: float, tp: float, current: float,
 def render_positions(db: Database, config) -> None:
     open_pos = db.get_open_positions()
 
-    if not open_pos:
-        badge = '<span class="badge badge-empty">0 open</span>'
-    else:
-        badge = f'<span class="badge badge-open">{len(open_pos)} / {config.risk.max_simultaneous_positions} open</span>'
-
+    count_badge = (
+        f'<span class="badge badge-open">{len(open_pos)} open</span>'
+        if open_pos else
+        f'<span class="badge badge-empty">0 open</span>'
+    )
     st.markdown(
-        f'<div style="display:flex;align-items:center;gap:0.7rem;margin-bottom:1rem;">'
-        f'<span style="font-family:\'Inter\',sans-serif;font-size:0.9rem;'
-        f'font-weight:600;color:#F0F0FC;">Open Positions</span>{badge}</div>',
+        f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem;">'
+        f'<span style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        f'font-weight:700;color:var(--text);">Positions</span>'
+        f'{count_badge}</div>',
         unsafe_allow_html=True,
     )
 
@@ -745,93 +988,107 @@ def render_positions(db: Database, config) -> None:
         st.info("No open positions. The bot will open one when it finds a valid edge.")
         return
 
-    eur_rate = config.paper_trading.eur_to_usd_rate
-
+    eur_rate    = config.paper_trading.eur_to_usd_rate
     token_ids   = tuple(p.token_id for p in open_pos)
     live_prices = fetch_live_prices(config, token_ids)
     prices_live = bool(live_prices)
-
     total_unrealized = 0.0
 
     for pos in open_pos:
-        side_val   = pos.side.value if pos.side else "—"
-        is_yes     = side_val == "BUY_YES"
-        side_tag   = '<span class="tag-yes">YES</span>' if is_yes else '<span class="tag-no">NO</span>'
-        card_class = "pos-card side-yes" if is_yes else "pos-card side-no"
+        side_val = pos.side.value if pos.side else "—"
+        is_yes   = side_val == "BUY_YES"
+        side_badge = '<span class="badge badge-yes">YES</span>' if is_yes else '<span class="badge badge-no">NO</span>'
+        card_cls   = "holding side-yes" if is_yes else "holding side-no"
 
         age_h = 0.0
         if pos.entry_timestamp:
             age_h = (datetime.now(timezone.utc) - pos.entry_timestamp).total_seconds() / 3600
 
-        current_price = live_prices.get(pos.token_id, pos.entry_price)
-        is_live       = pos.token_id in live_prices
-        est_pnl_eur   = pos.current_pnl_eur(current_price)
-        est_pnl_pct   = pos.current_pnl_pct(current_price)
+        current_price    = live_prices.get(pos.token_id, pos.entry_price)
+        is_live          = pos.token_id in live_prices
+        est_pnl_eur      = pos.current_pnl_eur(current_price)
+        est_pnl_pct      = pos.current_pnl_pct(current_price)
         total_unrealized += est_pnl_eur
 
-        pnl_cls = pnl_color_class(est_pnl_eur)
-        sl_eur  = (pos.stop_loss_price   - pos.entry_price) * pos.tokens_quantity / eur_rate
-        tp_eur  = (pos.take_profit_price - pos.entry_price) * pos.tokens_quantity / eur_rate
+        pc  = pnl_cls(est_pnl_eur)
+        sl_eur = (pos.stop_loss_price   - pos.entry_price) * pos.tokens_quantity / eur_rate
+        tp_eur = (pos.take_profit_price - pos.entry_price) * pos.tokens_quantity / eur_rate
 
         poly_url = (
             f"https://polymarket.com/event/{pos.market_slug}"
             if pos.market_slug else None
         )
-        progress = _progress_html(pos.entry_price, pos.stop_loss_price,
-                                   pos.take_profit_price, current_price, is_live)
+        track = _price_track(pos.entry_price, pos.stop_loss_price,
+                              pos.take_profit_price, current_price, is_live)
 
         q     = pos.market_question or ""
-        title = html_mod.escape(q[:75] + ("…" if len(q) > 75 else ""))
+        title = html_mod.escape(q[:80] + ("…" if len(q) > 80 else ""))
 
-        price_label = (
-            f'<span style="font-family:\'Roboto Mono\',monospace;font-size:0.72rem;">'
-            f'<span style="color:#10B981;font-size:0.55rem;">&#9679;</span> '
-            f'{current_price:.4f}</span>'
-            if is_live else
-            f'<span style="font-family:\'Roboto Mono\',monospace;font-size:0.72rem;color:#40405A;">'
-            f'&#9679; {current_price:.4f} (entry)</span>'
+        link_html = (
+            f'<a href="{poly_url}" target="_blank" '
+            f'style="font-family:\'DM Sans\',sans-serif;font-size:0.72rem;'
+            f'font-weight:500;color:#2563EB;text-decoration:none;">View market ↗</a>'
+            if poly_url else ""
         )
 
         card = (
-            f'<div class="{card_class}">'
+            f'<div class="{card_cls}">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">'
-            f'<div style="flex:1;">'
-            f'<div class="pos-title">{title}</div>'
-            f'<div class="pos-meta">'
-            f'<span>{side_tag}</span>'
-            f'<span>Size <b style="color:#A0A0C0">€{pos.size_eur:.2f}</b></span>'
-            f'<span>Conf <b style="color:#A0A0C0">{pos.confidence}</b>/100</span>'
-            f'<span>Open <b style="color:#A0A0C0">{age_h:.1f}h</b></span>'
-            f'<span>Now {price_label}</span>'
-            f'</div></div>'
-            f'<div style="text-align:right;flex-shrink:0;">'
-            f'<div class="pos-pnl {pnl_cls}">€{est_pnl_eur:+.2f}</div>'
-            f'<div style="font-family:\'Roboto Mono\',monospace;font-size:0.72rem;color:#6060A0;">{est_pnl_pct:+.2%}</div>'
-            f'</div></div>'
-            f'{progress}'
-            f'<div style="display:flex;gap:1.5rem;margin-top:0.7rem;font-family:\'Roboto Mono\',monospace;font-size:0.72rem;color:#6060A0;">'
-            f'<span>SL <b style="color:#F43F5E">€{sl_eur:+.2f}</b></span>'
-            f'<span>TP <b style="color:#10B981">€{tp_eur:+.2f}</b></span>'
-            + (f'<span><a href="{poly_url}" target="_blank" style="color:#6366F1;text-decoration:none;font-family:\'Inter\',sans-serif;font-size:0.75rem;">View on Polymarket →</a></span>' if poly_url else '<span style="color:#2A2A42;font-size:0.72rem;">No link (old position)</span>')
-            + '</div></div>'
+            # Left side
+            f'<div style="flex:1;min-width:0;">'
+            f'<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.35rem;">'
+            f'{side_badge}'
+            f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:0.58rem;'
+            f'color:var(--muted);">{pos.token_id[:10]}…</span>'
+            f'</div>'
+            f'<div class="holding-name">{title}</div>'
+            f'<div class="holding-meta">'
+            f'<span>Size <b>€{pos.size_eur:.2f}</b></span>'
+            f'<span>Conf <b>{pos.confidence}%</b></span>'
+            f'<span>Age <b>{age_h:.1f}h</b></span>'
+            f'<span>SL <b style="color:#E11D48">€{sl_eur:+.2f}</b></span>'
+            f'<span>TP <b style="color:#059669">€{tp_eur:+.2f}</b></span>'
+            f'</div>'
+            f'</div>'
+            # Right side — P&L
+            f'<div style="flex-shrink:0;text-align:right;">'
+            f'<div class="holding-pnl {pc}">€{est_pnl_eur:+.2f}</div>'
+            f'<div class="holding-pct {pc}">{est_pnl_pct:+.2%}</div>'
+            f'</div>'
+            f'</div>'
+            f'{track}'
+            f'<div style="margin-top:0.5rem;display:flex;justify-content:space-between;align-items:center;">'
+            f'<span style="font-family:\'JetBrains Mono\',monospace;font-size:0.60rem;color:var(--muted);">'
+            f'entry {pos.entry_price:.4f}'
+            f'</span>'
+            f'{link_html}'
+            f'</div>'
+            f'</div>'
         )
         st.markdown(card, unsafe_allow_html=True)
 
+    # ── Summary footer ────────────────────────────────────────────────────────
     st.divider()
     total_invested = sum(p.size_eur for p in open_pos)
     bal_hist    = db.get_balance_history()
     current_bal = float(bal_hist[-1]["balance_eur"]) if bal_hist else 0.0
     free_bal    = max(0.0, current_bal - total_invested)
+    pc          = pnl_cls(total_unrealized)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Capital in positions", f"€{total_invested:.2f}")
-    c2.metric(
-        "Unrealized P&L",
-        f"€{total_unrealized:+.2f}",
-        delta="live" if prices_live else "entry price (API unavailable)",
-        delta_color="normal" if total_unrealized >= 0 else "inverse",
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Invested", f"€{total_invested:.2f}", f"{len(open_pos)} positions")
+        + _stat_card(
+            "Unrealized P&L",
+            f"€{total_unrealized:+.2f}",
+            "live prices" if prices_live else "entry price",
+            pc if prices_live else "neutral",
+          )
+        + _stat_card("Free Cash", f"€{free_bal:.2f}", "available")
+        + _stat_card("Positions", f"{len(open_pos)} / {config.risk.max_simultaneous_positions}", "used")
+        + '</div>',
+        unsafe_allow_html=True,
     )
-    c3.metric("Free balance", f"€{free_bal:.2f}")
 
 
 # ── History Tab ───────────────────────────────────────────────────────────────
@@ -841,10 +1098,11 @@ def render_history(db: Database) -> None:
     closed     = [t for t in all_trades if t.status.value == "CLOSED"]
 
     st.markdown(
-        f'<div style="font-family:\'Inter\',sans-serif;font-size:0.9rem;'
-        f'font-weight:600;color:#F0F0FC;margin-bottom:1rem;">'
-        f'Trade History <span style="color:#6060A0;font-size:0.72rem;font-weight:400;">'
-        f'({len(closed)} closed)</span></div>',
+        f'<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        f'font-weight:700;color:var(--text);margin-bottom:1rem;">'
+        f'Trade History '
+        f'<span style="font-size:0.78rem;font-weight:400;color:var(--muted);">'
+        f'({len(closed)} closed trades)</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -853,8 +1111,8 @@ def render_history(db: Database) -> None:
         return
 
     c1, c2 = st.columns(2)
-    filter_side   = c1.selectbox("Side", ["All", "BUY_YES", "BUY_NO"])
-    filter_result = c2.selectbox("Result", ["All", "Winners", "Losers"])
+    filter_side   = c1.selectbox("Side",   ["All", "BUY_YES", "BUY_NO"])
+    filter_result = c2.selectbox("Result", ["All", "Winners",  "Losers"])
 
     filtered = closed
     if filter_side != "All":
@@ -883,9 +1141,10 @@ def render_history(db: Database) -> None:
 
 def render_analyses(db: Database) -> None:
     st.markdown(
-        '<div style="font-family:\'Inter\',sans-serif;font-size:0.9rem;'
-        'font-weight:600;color:#F0F0FC;margin-bottom:1rem;">'
-        'LLM Analyses <span style="color:#6060A0;font-size:0.72rem;font-weight:400;">(last 50)</span></div>',
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:1rem;">'
+        'LLM Analyses '
+        '<span style="font-size:0.78rem;font-weight:400;color:var(--muted);">(last 50)</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -900,38 +1159,38 @@ def render_analyses(db: Database) -> None:
         return
 
     data = [{
-        "Time":       r["timestamp"][:19],
-        "Market":     (r["market_question"] or "")[:42],
-        "YES price":  f"{r['current_yes_price']:.3f}",
-        "Prob":       f"{r['consensus_probability_yes']:.3f}",
-        "Edge":       fmt_pct(r["edge"] or 0),
-        "Conf":       r["confidence"],
-        "Rec":        r["recommendation"],
-        "Articles":   r["num_articles_analyzed"],
-        "Tokens":     f"{(r['llm_input_tokens'] or 0)+(r['llm_output_tokens'] or 0):,}",
+        "Time":      r["timestamp"][:19],
+        "Market":    (r["market_question"] or "")[:42],
+        "YES price": f"{r['current_yes_price']:.3f}",
+        "Prob":      f"{r['consensus_probability_yes']:.3f}",
+        "Edge":      fmt_pct(r["edge"] or 0),
+        "Conf":      r["confidence"],
+        "Rec":       r["recommendation"],
+        "Articles":  r["num_articles_analyzed"],
+        "Tokens":    f"{(r['llm_input_tokens'] or 0)+(r['llm_output_tokens'] or 0):,}",
     } for r in rows]
     st.dataframe(pd.DataFrame(data), use_container_width=True, height=360)
 
     from collections import Counter
     recs = [r["recommendation"] for r in rows if r.get("recommendation")]
     if recs:
-        st.markdown('<div class="section-header">Recommendation distribution</div>',
-                    unsafe_allow_html=True)
-        counts     = Counter(recs)
+        st.markdown(_sh("Recommendation Distribution"), unsafe_allow_html=True)
+        counts = Counter(recs)
         colors_map = {
-            "BUY_YES":           "#6366F1",
-            "BUY_NO":            "#F43F5E",
-            "WAIT":              "#F59E0B",
-            "INSUFFICIENT_DATA": "#6060A0",
+            "BUY_YES":           "#2563EB",
+            "BUY_NO":            "#E11D48",
+            "WAIT":              "#D97706",
+            "INSUFFICIENT_DATA": "#C5CDD8",
         }
         fig = go.Figure(go.Bar(
             x=list(counts.keys()), y=list(counts.values()),
-            marker_color=[colors_map.get(k, "#A0A0C0") for k in counts.keys()],
+            marker_color=[colors_map.get(k, "#8A96A8") for k in counts.keys()],
             marker_line_width=0,
+            marker_cornerradius=4,
             text=list(counts.values()), textposition="outside",
-            textfont=dict(color="#6060A0", size=11),
+            textfont=dict(color="#8A96A8", size=11),
         ))
-        _chart_style(fig, height=190)
+        _chart_style(fig, height=200)
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -939,8 +1198,8 @@ def render_analyses(db: Database) -> None:
 
 def render_balance_manager(db: Database, config) -> None:
     st.markdown(
-        '<div style="font-family:\'Inter\',sans-serif;font-size:0.9rem;'
-        'font-weight:600;color:#F0F0FC;margin-bottom:1rem;">Virtual Balance</div>',
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:1rem;">Virtual Balance</div>',
         unsafe_allow_html=True,
     )
 
@@ -949,10 +1208,15 @@ def render_balance_manager(db: Database, config) -> None:
     peak     = float(history[-1]["peak_balance"]) if history else current
     open_pos = db.get_open_positions()
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Current balance",    f"€{current:.2f}")
-    c2.metric("All-time peak",      f"€{peak:.2f}")
-    c3.metric("Initial (config)",   f"€{config.paper_trading.initial_balance_eur:.2f}")
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Current Balance",  f"€{current:.2f}")
+        + _stat_card("All-time Peak",    f"€{peak:.2f}")
+        + _stat_card("Initial (config)", f"€{config.paper_trading.initial_balance_eur:.2f}")
+        + _stat_card("Positions", f"{len(open_pos)}", "open")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
     st.divider()
 
@@ -971,26 +1235,20 @@ def render_balance_manager(db: Database, config) -> None:
         target = config.paper_trading.initial_balance_eur
         st.warning(f"Will reset balance to €{target:.2f}. Open positions are NOT closed.")
         if st.button("Confirm reset", type="primary"):
-            _log(target, "MANUAL_RESET")
-            st.success(f"Balance reset to €{target:.2f}")
-            st.rerun()
+            _log(target, "MANUAL_RESET"); st.success(f"Reset to €{target:.2f}"); st.rerun()
 
     elif action == "Reset to custom":
         new_val = st.number_input("New balance (€)", min_value=1.0, max_value=50000.0,
                                   value=current, step=10.0)
         if st.button("Confirm custom reset", type="primary"):
-            _log(new_val, "MANUAL_RESET")
-            st.success(f"Balance reset to €{new_val:.2f}")
-            st.rerun()
+            _log(new_val, "MANUAL_RESET"); st.success(f"Reset to €{new_val:.2f}"); st.rerun()
 
     elif action == "Add funds":
         amount = st.number_input("Amount to add (€)", min_value=1.0, max_value=50000.0,
                                  value=50.0, step=10.0)
         st.info(f"Resulting balance: €{current + amount:.2f}")
         if st.button("Confirm deposit", type="primary"):
-            _log(current + amount, "MANUAL_ADD")
-            st.success(f"Added €{amount:.2f}")
-            st.rerun()
+            _log(current + amount, "MANUAL_ADD"); st.success(f"Added €{amount:.2f}"); st.rerun()
 
     else:
         max_ret = max(1.0, current - 1.0)
@@ -998,13 +1256,10 @@ def render_balance_manager(db: Database, config) -> None:
                                   max_value=max_ret, value=min(10.0, max_ret), step=5.0)
         st.info(f"Resulting balance: €{current - amount:.2f}")
         if st.button("Confirm withdrawal", type="primary"):
-            _log(current - amount, "MANUAL_SUBTRACT")
-            st.success(f"Withdrew €{amount:.2f}")
-            st.rerun()
+            _log(current - amount, "MANUAL_SUBTRACT"); st.success(f"Withdrew €{amount:.2f}"); st.rerun()
 
     st.divider()
-    st.markdown('<div class="section-header">Manual adjustments log</div>',
-                unsafe_allow_html=True)
+    st.markdown(_sh("Manual Adjustments"), unsafe_allow_html=True)
     manual = [h for h in history if (h.get("event") or "").startswith("MANUAL")]
     if manual:
         st.dataframe(pd.DataFrame([{
@@ -1020,12 +1275,11 @@ def render_balance_manager(db: Database, config) -> None:
 
 def render_backtest(config) -> None:
     st.markdown(
-        '<div style="font-family:\'Inter\',sans-serif;font-size:0.9rem;'
-        'font-weight:600;color:#F0F0FC;margin-bottom:0.3rem;">Backtesting</div>',
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:0.3rem;">Backtesting</div>',
         unsafe_allow_html=True,
     )
     st.caption(
-        "Simulate the bot on resolved markets. "
         "_current_ mode: today's news (fast, look-ahead bias). "
         "_replay_ mode: historical GDELT news (slower)."
     )
@@ -1041,14 +1295,14 @@ def render_backtest(config) -> None:
     col_a, col_b = st.columns(2)
     export_xl = col_a.checkbox("Export Excel on finish")
     col_b.markdown(
-        f'<div style="font-family:\'Roboto Mono\',monospace;font-size:0.75rem;'
-        f'color:#6060A0;padding-top:0.6rem;">'
-        f'LLM: {config.llm.provider} / {config.llm.model.split(":")[0]}</div>',
+        f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;'
+        f'color:var(--muted);padding-top:0.6rem;">'
+        f'{config.llm.provider} / {config.llm.model.split(":")[0]}</div>',
         unsafe_allow_html=True,
     )
 
     if st.button("Run Backtest", type="primary"):
-        with st.spinner(f"Analyzing {n_markets} markets… this may take a few minutes."):
+        with st.spinner(f"Analysing {n_markets} markets…"):
             try:
                 from src.backtester import Backtester
                 result = Backtester(
@@ -1065,36 +1319,40 @@ def render_backtest(config) -> None:
 
     result = st.session_state["last_backtest"]
     st.divider()
-    st.markdown('<div class="section-header">Results</div>', unsafe_allow_html=True)
+    st.markdown(_sh("Results"), unsafe_allow_html=True)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Markets",   result.markets_analyzed)
-    c2.metric("Trades",    result.trades_executed)
-    c3.metric("Win Rate",  f"{result.win_rate:.1%}")
-    c4.metric("P&L",
-              f"{'+'if result.total_pnl_eur>=0 else ''}€{result.total_pnl_eur:.2f}",
-              delta_color="normal" if result.total_pnl_eur >= 0 else "inverse")
-    c5.metric("Max DD",    f"{result.max_drawdown_pct:.2%}")
-
-    c6, c7, c8 = st.columns(3)
-    c6.metric("Final Balance", f"€{result.final_balance:.2f}")
     retorno = (result.final_balance - result.initial_balance) / result.initial_balance
-    c7.metric("Total Return",  fmt_pct(retorno),
-              delta_color="normal" if retorno >= 0 else "inverse")
-    c8.metric("Sharpe (approx)", f"{result.sharpe_ratio:.2f}")
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Markets",    str(result.markets_analyzed))
+        + _stat_card("Trades",     str(result.trades_executed))
+        + _stat_card("Win Rate",   f"{result.win_rate:.1%}")
+        + _stat_card("Total P&L",  fmt_eur(result.total_pnl_eur), "",
+                     pnl_cls(result.total_pnl_eur))
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Final Balance", f"€{result.final_balance:.2f}")
+        + _stat_card("Return",        fmt_pct(retorno), "", pnl_cls(retorno))
+        + _stat_card("Sharpe",        f"{result.sharpe_ratio:.2f}")
+        + _stat_card("Max DD",        f"{result.max_drawdown_pct:.2%}")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
 
     executed = [t for t in result.trades
                 if str(t.decision) in ("OPEN_TRADE", "DecisionAction.OPEN_TRADE")]
     if not executed:
         return
 
-    st.markdown(f'<div class="section-header">Executed trades ({len(executed)})</div>',
-                unsafe_allow_html=True)
+    st.markdown(_sh(f"Executed Trades", f"{len(executed)} trades"), unsafe_allow_html=True)
     rows = [{
         "Market":   t.market_question[:48],
         "YES won":  "Yes" if t.resolved_yes else "No",
         "Side":     t.side.value if hasattr(t.side, "value") else str(t.side),
-        "P&L €":    f"{'+'if t.pnl_eur>=0 else ''}€{t.pnl_eur:.2f}",
+        "P&L €":    fmt_eur(t.pnl_eur),
         "P&L %":    fmt_pct(t.pnl_pct),
         "Conf":     t.confidence,
         "Edge":     fmt_pct(t.edge),
@@ -1110,19 +1368,19 @@ def render_backtest(config) -> None:
         running += t.pnl_eur
         curve.append(running)
 
-    st.markdown('<div class="section-header">Simulated balance curve</div>',
-                unsafe_allow_html=True)
+    st.markdown(_sh("Simulated Balance Curve"), unsafe_allow_html=True)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=list(range(1, len(curve)+1)), y=curve,
         mode="lines+markers",
-        line=dict(color="#6366F1", width=2),
+        line=dict(color="#2563EB", width=2, shape="spline", smoothing=0.3),
+        fill="tozeroy", fillcolor="rgba(37,99,235,0.06)",
         marker=dict(
-            color=["#10B981" if v >= result.initial_balance else "#F43F5E" for v in curve],
+            color=["#059669" if v >= result.initial_balance else "#E11D48" for v in curve],
             size=5,
         ),
     ))
-    fig.add_hline(y=result.initial_balance, line_dash="dash", line_color="#2A2A42")
+    fig.add_hline(y=result.initial_balance, line_dash="dash", line_color="#CBD5E1")
     _chart_style(fig, height=240)
     fig.update_layout(xaxis_title="Trade #", yaxis_title="Balance (€)")
     st.plotly_chart(fig, use_container_width=True)
@@ -1139,41 +1397,30 @@ def render_backtest(config) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    config         = get_config()
-    refresh, _     = render_sidebar(config)
+    config  = get_config()
+    db      = get_db(config)
+    history = db.get_balance_history()
+    open_pos = db.get_open_positions()
 
+    refresh, _ = render_sidebar(config, history, open_pos)
+
+    # ── Page header ──────────────────────────────────────────────────────────
     now_str = datetime.now().strftime("%H:%M:%S")
     st.markdown(f"""
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                padding:0.2rem 0 1.2rem;border-bottom:1px solid #262640;
-                margin-bottom:1.2rem;">
+    <div class="page-header">
       <div>
-        <div style="font-family:'Inter',sans-serif;font-size:1.5rem;font-weight:700;
-                    color:#6366F1;letter-spacing:0.5px;">
-          POLYBOT
-        </div>
-        <div style="font-family:'Inter',sans-serif;font-size:0.75rem;
-                    color:#40405A;letter-spacing:0.5px;margin-top:2px;">
-          Paper Trading Terminal · Polymarket
-        </div>
+        <div class="page-title">Portfolio Dashboard</div>
+        <div class="page-sub">Polymarket paper trading · {config.app.name}</div>
       </div>
-      <div style="text-align:right;">
-        <div style="font-family:'Roboto Mono',monospace;font-size:0.8rem;
-                    color:#6366F1;letter-spacing:1px;">
-          <span class="dot dot-live"></span>{now_str}
-        </div>
-        <div style="font-family:'Roboto Mono',monospace;font-size:0.65rem;
-                    color:#40405A;margin-top:2px;">
-          refresh every {refresh}s
-        </div>
+      <div class="page-time">
+        <span class="dot dot-live"></span>{now_str}
+        <div style="font-size:0.60rem;color:var(--muted);margin-top:2px;">↻ {refresh}s</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
-    db = get_db(config)
-
-    if not db.get_balance_history():
-        st.info("No data yet. Start the bot: `python main.py`")
+    if not history:
+        st.info("No data yet — start the bot: `python main.py`")
 
     tabs = st.tabs([
         "Overview",
