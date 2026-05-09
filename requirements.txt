@@ -1,0 +1,60 @@
+# =====================================================
+# Polymarket Paper Trading Bot - Dependencies
+# Python 3.10+
+# =====================================================
+
+# --- Configuration & environment ---
+python-dotenv==1.0.1
+PyYAML==6.0.2
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
+# --- HTTP clients ---
+requests==2.32.3
+httpx==0.27.2
+
+# --- LLM (Anthropic Claude) ---
+anthropic==0.39.0
+
+# --- Polymarket SDK ---
+py-clob-client==0.20.0
+
+# --- News sources ---
+newsapi-python==0.2.7
+gdeltdoc==1.7.0
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+telethon==1.36.0          # Telegram MTProto client (lee canales públicos)
+
+# --- Data & analysis ---
+pandas==2.2.3
+numpy==2.1.3
+python-dateutil==2.9.0.post0
+
+# --- Excel reports ---
+openpyxl==3.1.5
+xlsxwriter==3.2.0
+
+# --- Database ---
+# sqlite3 is built into Python stdlib
+
+# --- Notifications ---
+discord-webhook==1.3.1
+
+# --- Scheduling ---
+APScheduler==3.10.4
+
+# --- Logging ---
+loguru==0.7.2
+
+# --- Dashboard ---
+streamlit==1.43.0
+plotly==5.24.1
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-mock==3.14.0
+
+# --- Utilities ---
+tenacity==9.0.0          # Retries con backoff
+rapidfuzz==3.10.1        # Fuzzy matching para deduplicación de noticias
+watchdog==6.0.0          # File-system watcher (dev hot-reload via dev_runner.py)

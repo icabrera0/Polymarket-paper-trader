@@ -1,0 +1,1133 @@
+"""
+Orchestrator — el director de orquesta del bot.
+
+Conecta todos los módulos en un pipeline y los planifica con APScheduler:
+
+  Cada 5 min  → ciclo principal: scan → keywords → news → analyze → decide → execute
+  Cada 15 min → reevaluar posiciones abiertas con precios actualizados
+  Cada 23:55  → generar reporte Excel diario + notificación de resumen
+
+El Orchestrator gestiona el ciclo de vida completo:
+  - Arranque: inicializa todos los módulos, restaura estado de la DB,
+    verifica Ollama si procede, envía ping de inicio a Discord.
+  - Bucle: ejecuta los jobs planificados indefinidamente.
+  - Parada: captura Ctrl+C / SIGTERM, cierra la DB limpiamente y
+    envía notificación de apagado.
+
+Filosofía de errores:
+  - Los errores dentro de un job se loguean pero NO paran el bot.
+  - Solo un error CRÍTICO en el arranque puede abortar.
+"""
+
+from __future__ import annotations
+
+import json
+import signal
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+_HOT_RELOAD_FLAG = Path(__file__).resolve().parent.parent / "data" / "hot_reload.flag"
+_HOT_RELOAD_EXIT_CODE = 42
+from loguru import logger
+
+from src.clob_client import ClobApiClient
+from src.config_loader import BotConfig, load_config, validate_secrets
+from src.database import Database
+from src.decision_engine import DecisionEngine
+from src.market_scanner import MarketScanner
+from src.models import CloseReason, DecisionAction, TradeDecision, TradeRecommendation, TradeSide
+from src.news_ingestor import NewsIngestor
+from src.notification_system import NotificationSystem
+from src.paper_trader import PaperTrader
+from src.report_generator import ReportGenerator
+from src.risk_manager import RiskManager
+from src.sentiment_analyzer import SentimentAnalyzer
+
+
+# =====================================================
+# Keyword extractor (mismo que el script live)
+# =====================================================
+
+
+import re
+
+_STOPWORDS = {
+    "will", "the", "a", "an", "is", "are", "be", "by", "of", "in", "on",
+    "at", "to", "for", "and", "or", "if", "than", "more", "less", "this",
+    "that", "before", "after", "any", "all", "with", "from", "into", "as",
+    "have", "has", "had", "win", "wins", "won", "do", "does", "did",
+    "can", "could", "should", "would", "may", "might", "first", "next",
+    "year", "month", "week", "day", "much", "many", "make", "makes",
+    "made", "election", "vote",
+}
+
+
+def extract_keywords(question: str, max_kw: int = 4) -> list[str]:
+    words = re.findall(r"\b[A-Za-z][A-Za-z0-9'-]{3,}\b", question)
+    entities, common = [], []
+    for w in words:
+        if w.lower() in _STOPWORDS:
+            continue
+        (entities if w[0].isupper() else common).append(w if w[0].isupper() else w.lower())
+    seen: set[str] = set()
+    result: list[str] = []
+    for w in entities + common:
+        if w.lower() not in seen:
+            seen.add(w.lower())
+            result.append(w)
+        if len(result) >= max_kw:
+            break
+    return result
+
+
+# =====================================================
+# Orchestrator
+# =====================================================
+
+
+class Orchestrator:
+    """Coordina todos los módulos y planifica los jobs."""
+
+    def __init__(self, config: BotConfig) -> None:
+        self.config = config
+        self._log = logger.bind(module="orchestrator")
+        self._running = False
+        self._scheduler: Optional[BackgroundScheduler] = None
+
+        # Prevents concurrent main cycles (APScheduler doesn't track the direct
+        # call in start(), so without this both can run simultaneously).
+        self._cycle_lock = threading.Lock()
+        # Lock that serialises position-closing across threads (price monitor
+        # and position review must not evaluate the same position simultaneously)
+        self._position_lock = threading.Lock()
+        self._price_monitor_running = False
+        # Drawdown notification cooldown — only alert once per 24h
+        self._last_drawdown_alert_ts: float = 0.0
+        # Dead-token zombie tracking: throttle Gamma resolution checks (once/60s)
+        self._resolution_last_check: dict[str, float] = {}
+        # When each zombie token was FIRST detected dead — never reset on
+        # intermediate Gamma responses, only cleared on successful close.
+        self._zombie_since: dict[str, float] = {}
+
+        # --- Módulos ---
+        self.clob_client = ClobApiClient()
+        self.db = Database(config.database.path)
+        self.risk_manager = RiskManager(config)
+        self.paper_trader = PaperTrader(config, self.risk_manager, self.db)
+        self.market_scanner = MarketScanner(config)
+        self.news_ingestor = NewsIngestor(config)
+        self.sentiment_analyzer = SentimentAnalyzer(config)
+        self.decision_engine = DecisionEngine(config, self.risk_manager)
+        self.report_generator = ReportGenerator(config, self.db)
+        self.notifications = NotificationSystem(config)
+
+        # Sports in-play: track trade_ids separately from main positions
+        self._sports_trade_ids: set[str] = set()
+
+        self._log.info(
+            "Orchestrator inicializado. Balance: €{:.2f}, "
+            "Posiciones abiertas: {}",
+            self.paper_trader.balance_eur,
+            self.paper_trader.num_open_positions,
+        )
+
+    # =====================================================
+    # Ciclo de vida
+    # =====================================================
+
+    def start(self) -> None:
+        """Arranca el bot y bloquea hasta que se detenga."""
+        self._log.info("=" * 60)
+        self._log.info("  POLYMARKET PAPER TRADING BOT — ARRANCANDO")
+        self._log.info("=" * 60)
+
+        # Verificar Ollama si aplica
+        if self.config.llm.provider == "ollama":
+            from src.llm_client import OllamaClient, OllamaUnavailable
+            try:
+                OllamaClient(self.config).verify_setup()
+            except OllamaUnavailable as exc:
+                self._log.error("Ollama no disponible: {}", exc)
+                self._log.error(
+                    "Ejecuta 'ollama serve' y asegúrate de que el modelo "
+                    "está descargado. Abortando."
+                )
+                sys.exit(1)
+
+        # Notificar arranque
+        self.notifications.send_text(
+            f"🤖 **Bot arrancado** | Balance: €{self.paper_trader.balance_eur:.2f} "
+            f"| Posiciones abiertas: {self.paper_trader.num_open_positions}"
+        )
+
+        # Registrar handlers de señal para parada limpia
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+        # Planificar jobs
+        self._scheduler = BackgroundScheduler(
+            timezone=self.config.app.timezone
+        )
+
+        # Job 1: Ciclo principal (cada N segundos)
+        self._scheduler.add_job(
+            self._run_main_cycle,
+            trigger=IntervalTrigger(
+                seconds=self.config.polymarket.scan_interval_seconds
+            ),
+            id="main_cycle",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
+        # Job 2: Reevaluar posiciones (cada 15 min)
+        self._scheduler.add_job(
+            self._run_position_review,
+            trigger=IntervalTrigger(
+                minutes=self.config.decision.reevaluate_open_positions_minutes
+            ),
+            id="position_review",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
+        )
+
+        # Job 3: Reporte diario (hora configurada en settings.yaml)
+        report_time = self.config.reports.generation_time  # "23:55"
+        h, m = report_time.split(":")
+        self._scheduler.add_job(
+            self._run_daily_report,
+            trigger=CronTrigger(hour=int(h), minute=int(m)),
+            id="daily_report",
+            max_instances=1,
+        )
+
+        self._scheduler.start()
+        self._running = True
+
+        # Start the price monitor as a daemon thread (10-second polling, no
+        # scheduler overhead) — replaces the old 60-second APScheduler job
+        self._price_monitor_running = True
+        _pm_thread = threading.Thread(
+            target=self._price_monitor_loop,
+            name="price-monitor",
+            daemon=True,
+        )
+        _pm_thread.start()
+
+        self._log.info(
+            "Scheduler iniciado. Ciclo cada {}s, revisión cada {}min, "
+            "monitor SL/TP cada 10s, reporte a las {}",
+            self.config.polymarket.scan_interval_seconds,
+            self.config.decision.reevaluate_open_positions_minutes,
+            report_time,
+        )
+
+        # Ejecutar el primer ciclo inmediatamente sin esperar el intervalo
+        self._log.info("Ejecutando ciclo inicial...")
+        self._run_main_cycle()
+
+        # Bloquear en el hilo principal
+        try:
+            while self._running:
+                if _HOT_RELOAD_FLAG.exists():
+                    self._hot_reload()
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self._shutdown()
+
+    def _handle_shutdown(self, signum, frame) -> None:
+        self._log.info("Señal de parada recibida ({}). Deteniendo bot...", signum)
+        self._shutdown()
+
+    def _shutdown(self) -> None:
+        self._running = False
+        self._price_monitor_running = False
+        if self._scheduler and self._scheduler.running:
+            self._scheduler.shutdown(wait=False)
+        self.notifications.send_text(
+            f"🛑 **Bot detenido** | Balance final: €{self.paper_trader.balance_eur:.2f}"
+        )
+        self.db.close()
+        self._log.info("Bot detenido limpiamente.")
+        sys.exit(0)
+
+    def _hot_reload(self) -> None:
+        """Graceful restart triggered by dev_runner.py writing hot_reload.flag."""
+        _HOT_RELOAD_FLAG.unlink(missing_ok=True)
+        self._log.info("Hot reload solicitado — reiniciando con nuevo código...")
+        self._running = False
+        self._price_monitor_running = False
+        if self._scheduler and self._scheduler.running:
+            self._scheduler.shutdown(wait=True)  # let current jobs finish
+        self.db.close()
+        sys.exit(_HOT_RELOAD_EXIT_CODE)
+
+    # =====================================================
+    # Jobs
+    # =====================================================
+
+    def _apply_overrides(self) -> None:
+        """Apply dashboard overrides from data/overrides.json (written by the UI)."""
+        overrides_path = Path(__file__).resolve().parent.parent / "data" / "overrides.json"
+        if not overrides_path.exists():
+            return
+        try:
+            data = json.loads(overrides_path.read_text())
+
+            new_max = int(data.get("max_simultaneous_positions", self.config.risk.max_simultaneous_positions))
+            if new_max != self.config.risk.max_simultaneous_positions:
+                self._log.info(
+                    "Override: max_simultaneous_positions {} → {}",
+                    self.config.risk.max_simultaneous_positions,
+                    new_max,
+                )
+                self.config.risk.max_simultaneous_positions = new_max
+
+            new_par = int(data.get("llm_parallelism", self.config.llm.llm_parallelism))
+            new_par = max(1, min(8, new_par))
+            if new_par != self.config.llm.llm_parallelism:
+                self._log.info(
+                    "Override: llm_parallelism {} → {}",
+                    self.config.llm.llm_parallelism,
+                    new_par,
+                )
+                self.config.llm.llm_parallelism = new_par
+
+        except Exception as exc:
+            self._log.warning("Error leyendo overrides del dashboard: {}", exc)
+
+    def _run_main_cycle(self) -> None:
+        """Ciclo principal: scan → news → analyze → decide → execute."""
+        if not self._cycle_lock.acquire(blocking=False):
+            self._log.warning(
+                "Ciclo anterior aún en ejecución — saltando disparo del scheduler"
+            )
+            return
+        try:
+            self._apply_overrides()
+            self._log.info(
+                "--- Ciclo principal | balance=€{:.2f} | posiciones={}",
+                self.paper_trader.balance_eur,
+                self.paper_trader.num_open_positions,
+            )
+
+            # 1) Comprobar si el bot está pausado
+            if self.risk_manager.is_paused:
+                self._log.warning(
+                    "Bot pausado por drawdown. Saltando ciclo. "
+                    "Usa 'python scripts/manage_balance.py status' para revisar."
+                )
+                return
+
+            # 2) Escanear mercados
+            markets = self.market_scanner.scan()
+            if not markets:
+                self._log.info("No hay mercados operables en este ciclo.")
+                return
+
+            # 3) Re-ranking por categoría y selección de candidatos
+            candidates = self.market_scanner.rank_for_analysis(
+                markets,
+                category_boost=self.config.decision.category_priority_boost,
+                top_n=self.config.decision.markets_to_analyze_per_cycle,
+            )
+
+            # 3b) NO-hunt: append high-YES markets specifically to find
+            #     overpriced YES / COMPRAR_NO opportunities. Markets with
+            #     YES >= threshold are often under-analyzed for the NO side.
+            if self.config.decision.no_hunt_enabled:
+                candidate_ids = {m.market_id for m in candidates}
+                no_hunt = [
+                    m for m in markets
+                    if m.yes_price >= self.config.decision.no_hunt_min_yes_price
+                    and m.market_id not in candidate_ids
+                ]
+                no_hunt.sort(key=lambda m: m.volume_24h_usd, reverse=True)
+                no_hunt = no_hunt[:self.config.decision.no_hunt_max_candidates]
+                if no_hunt:
+                    self._log.info(
+                        "NO hunt: +{} mercados con YES≥{:.0%} añadidos al análisis",
+                        len(no_hunt),
+                        self.config.decision.no_hunt_min_yes_price,
+                    )
+                    candidates = candidates + no_hunt
+
+            # ── Pipeline: each worker fetches news + runs LLM for its own markets ──
+            # Previously: Phase 1 fetched ALL news (3 workers), Phase 2 analyzed ALL
+            # markets (N LLM workers). Problem: workers shared the same news pool and
+            # caused GDELT rate-limit bursts. Now each worker owns its markets fully,
+            # interleaving GDELT calls with Ollama calls — no shared state.
+            parallelism = self.config.llm.llm_parallelism
+            fallback_ts = (
+                self.config.decision.fallback_news_lookback
+                if self.config.decision.enable_fallback_search
+                else None
+            )
+
+            pairs: list[tuple] = [None] * len(candidates)    # type: ignore[assignment]
+            analyses: list = [None] * len(candidates)         # type: ignore[assignment]
+
+            def _pipeline_task(market, idx: int):
+                worker = threading.current_thread().name
+                t0 = time.time()
+                keywords = extract_keywords(market.question)
+                articles = self.news_ingestor.fetch(
+                    keywords, max_articles=10, fallback_timespan=fallback_ts
+                )
+                self._log.info(
+                    "[{}] start #{} '{}' ({} arts)",
+                    worker, idx, market.question[:50], len(articles),
+                )
+                result = self.sentiment_analyzer.analyze(market, articles)
+                elapsed = time.time() - t0
+                self._log.info(
+                    "[{}] done  #{} '{}' | rec={} conf={} | {:.1f}s",
+                    worker, idx, market.question[:40],
+                    result.recommendation.value, result.confidence, elapsed,
+                )
+                return articles, result
+
+            t_pipeline = time.time()
+            if parallelism > 1:
+                with ThreadPoolExecutor(
+                    max_workers=parallelism, thread_name_prefix="llm-worker"
+                ) as pool:
+                    future_to_idx = {
+                        pool.submit(_pipeline_task, market, idx): idx
+                        for idx, market in enumerate(candidates)
+                    }
+                    for future in as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        market = candidates[idx]
+                        try:
+                            articles, analysis = future.result()
+                            pairs[idx] = (market, articles)
+                            analyses[idx] = analysis
+                        except Exception as exc:
+                            self._log.error(
+                                "Pipeline error #{} '{}': {}",
+                                idx, market.question[:40], exc,
+                            )
+                            pairs[idx] = (market, [])
+                            analyses[idx] = self.sentiment_analyzer._make_insufficient_data(
+                                market, [], reason=str(exc)
+                            )
+            else:
+                for idx, market in enumerate(candidates):
+                    try:
+                        articles, analysis = _pipeline_task(market, idx)
+                        pairs[idx] = (market, articles)
+                        analyses[idx] = analysis
+                    except Exception as exc:
+                        self._log.error(
+                            "Pipeline error #{} '{}': {}",
+                            idx, market.question[:40], exc,
+                        )
+                        pairs[idx] = (market, [])
+                        analyses[idx] = self.sentiment_analyzer._make_insufficient_data(
+                            market, [], reason=str(exc)
+                        )
+
+            actionable = sum(
+                1 for a in analyses
+                if a and a.recommendation.value not in ("ESPERAR", "INSUFFICIENT_DATA")
+            )
+            self._log.info(
+                "Pipeline completado: {} mercados en {:.1f}s | {} accionables",
+                len(candidates), time.time() - t_pipeline, actionable,
+            )
+
+            # ── Phase 3: Decide + execute (serial — position state must be consistent)
+            new_trades = 0
+            for (market, articles), analysis in zip(pairs, analyses):
+                # Parar si llegamos al máximo de posiciones
+                if (
+                    self.paper_trader.num_open_positions
+                    >= self.config.risk.max_simultaneous_positions
+                ):
+                    self._log.info(
+                        "Máximo de posiciones alcanzado ({}/{}). "
+                        "Sin nuevos trades este ciclo — revisando posiciones abiertas.",
+                        self.paper_trader.num_open_positions,
+                        self.config.risk.max_simultaneous_positions,
+                    )
+                    self._run_position_review(scanned_markets=markets)
+                    break
+
+                self.db.log_analysis(analysis)
+
+                decision = self.decision_engine.decide(
+                    analysis=analysis,
+                    current_balance_eur=self.paper_trader.balance_eur,
+                    open_positions=self.paper_trader.open_positions,
+                    articles=articles,
+                )
+
+                if decision.action == DecisionAction.OPEN_TRADE:
+                    position = self.paper_trader.execute_decision(decision)
+                    if position:
+                        new_trades += 1
+                        self.notifications.notify_trade_open(
+                            position, self.paper_trader.balance_eur
+                        )
+                else:
+                    self.db.log_decision(decision)
+
+            if new_trades > 0:
+                self._log.info(
+                    "Ciclo completado: {} trade/s abierto/s", new_trades
+                )
+
+            # 5) Comprobar drawdown tras el ciclo
+            self._check_drawdown()
+
+            # 6) Módulo deportivo secundario (solo si enabled)
+            if self.config.sports_in_play.enabled:
+                self._run_sports_cycle()
+
+        except Exception as exc:
+            self._log.error("Error en ciclo principal: {}", exc, exc_info=True)
+            self.notifications.notify_error("main_cycle", str(exc))
+        finally:
+            self._cycle_lock.release()
+
+    def _price_monitor_loop(self) -> None:
+        """Daemon thread body: polls every 10 s while the bot is running."""
+        self._log.info("Price monitor thread arrancado (intervalo 10s)")
+        tick = 0
+        while self._price_monitor_running and self._running:
+            tick += 1
+            try:
+                self._run_price_monitor(tick=tick)
+            except Exception as exc:
+                self._log.error("Price monitor loop error: {}", exc, exc_info=True)
+            time.sleep(10)
+        self._log.info("Price monitor thread detenido")
+
+    def _run_price_monitor(self, tick: int = 0) -> None:
+        """Lightweight SL/TP monitor — called every 10 s from the daemon thread.
+
+        Only fetches current prices for open positions and closes them if
+        SL/TP is triggered. No news fetch, no LLM. Uses a non-blocking lock
+        so it yields if _run_position_review is already evaluating positions.
+        """
+        if not self.paper_trader.open_positions:
+            return
+
+        if not self._position_lock.acquire(blocking=False):
+            self._log.debug("Price monitor: position review en curso, saltando tick")
+            return
+
+        try:
+            positions = self.paper_trader.open_positions
+            if not positions:
+                return
+
+            token_ids = [p.token_id for p in positions]
+            price_map = self.clob_client.fetch_midpoints(token_ids)
+
+            # Compact tick log — one line per cycle, shows dead tokens explicitly
+            from src.clob_client import _DEAD_TOKENS
+            parts = []
+            for pos in positions:
+                p = price_map.get(pos.token_id)
+                label = pos.market_question[:20].rstrip()
+                if p is not None:
+                    pnl = (p - pos.entry_price) / pos.entry_price
+                    parts.append(f"{label}: {p:.4f} ({pnl:+.1%})")
+                elif pos.token_id in _DEAD_TOKENS:
+                    parts.append(f"{label}: DEAD (closing...)")
+                else:
+                    parts.append(f"{label}: no price")
+            self._log.opt(colors=True).info(
+                "<dim>[TICK #{tick}] {n} pos │ {prices}</dim>",
+                tick=tick, n=len(positions), prices="  │  ".join(parts),
+            )
+
+            for position in positions:
+                current_price = price_map.get(position.token_id)
+                if current_price is None:
+                    settlement = self._check_market_resolution(position)
+                    if settlement is not None:
+                        self._close_resolved_position(position, settlement)
+                    continue
+
+                close_decision = self.decision_engine.evaluate_open_position(
+                    position=position,
+                    current_price=current_price,
+                    new_analysis=None,
+                )
+
+                if close_decision.should_close:
+                    self._log.info(
+                        "Price monitor: cerrando '{}' por {} | precio={:.4f}",
+                        position.market_question[:40],
+                        close_decision.reason,
+                        current_price,
+                    )
+                    closed = self.paper_trader.close_position(
+                        trade_id=position.trade_id,
+                        current_market_price=current_price,
+                        reason=close_decision.reason or CloseReason.MANUAL,
+                        notes=close_decision.notes,
+                    )
+                    if closed:
+                        if close_decision.reason and "STOP" in close_decision.reason.value:
+                            self.notifications.notify_stop_loss(
+                                closed, self.paper_trader.balance_eur
+                            )
+                        else:
+                            self.notifications.notify_trade_close(
+                                closed, self.paper_trader.balance_eur
+                            )
+                else:
+                    self._log.debug(
+                        "Price monitor: {} | precio={:.4f} | P&L={:+.2%}",
+                        position.trade_id[:8],
+                        current_price,
+                        close_decision.pnl_pct,
+                    )
+
+        except Exception as exc:
+            self._log.error("Error en price monitor: {}", exc, exc_info=True)
+        finally:
+            self._position_lock.release()
+
+    def _run_sports_cycle(self) -> None:
+        """Módulo secundario: busca oportunidades de underdog en partidos en directo.
+
+        Solo opera cuando sports_in_play.enabled=true. Mantiene max 1 posición
+        deportiva simultánea con tamaño fijo y prompt especializado.
+        """
+        cfg = self.config.sports_in_play
+        open_ids = {p.trade_id for p in self.paper_trader.open_positions}
+
+        # Limpiar _sports_trade_ids de posiciones ya cerradas
+        self._sports_trade_ids &= open_ids
+
+        if len(self._sports_trade_ids) >= cfg.max_positions:
+            self._log.debug(
+                "Sports: {}/{} posiciones abiertas — saltando ciclo",
+                len(self._sports_trade_ids),
+                cfg.max_positions,
+            )
+            return
+
+        candidates = self.market_scanner.scan_sports_candidates()
+        if not candidates:
+            return
+
+        now = datetime.now(timezone.utc)
+        fresh_cutoff_s = cfg.min_fresh_news_minutes * 60
+        slots = cfg.max_positions - len(self._sports_trade_ids)
+
+        for market in candidates:
+            if slots <= 0:
+                break
+
+            keywords = extract_keywords(market.question)
+            articles = self.news_ingestor.fetch(keywords, max_articles=8)
+
+            # Exigir al menos 1 artículo fresco (<min_fresh_news_minutes)
+            fresh = [
+                a for a in articles
+                if a.published_at
+                and (now - a.published_at).total_seconds() < fresh_cutoff_s
+            ]
+            if not fresh:
+                self._log.debug(
+                    "Sports: '{}' — sin noticias frescas (<{}min), descartado",
+                    market.question[:40],
+                    cfg.min_fresh_news_minutes,
+                )
+                continue
+
+            analysis = self.sentiment_analyzer.analyze_sports(market, articles)
+            self.db.log_analysis(analysis)
+
+            if (
+                analysis.recommendation != TradeRecommendation.COMPRAR_NO
+                or analysis.confidence < cfg.min_confidence
+            ):
+                continue
+
+            # Calcular SL/TP específicos para deportes
+            no_price = market.no_price
+            sl_price = no_price * (1.0 - cfg.stop_loss_pct)
+            tp_price = no_price * (1.0 + cfg.take_profit_pct)
+
+            # Clamp dentro de rango válido
+            sl_price = max(0.001, min(0.999, sl_price))
+            tp_price = max(0.001, min(0.999, tp_price))
+
+            decision = TradeDecision(
+                action=DecisionAction.OPEN_TRADE,
+                market_id=market.market_id,
+                market_question=market.question,
+                market_slug=market.slug,
+                side=TradeSide.BUY_NO,
+                token_id=market.no_token_id,
+                entry_price=no_price,
+                size_eur=cfg.position_size_eur,
+                stop_loss_price=sl_price,
+                take_profit_price=tp_price,
+                confidence=analysis.confidence,
+                edge=analysis.edge,
+                rationale=(
+                    f"[SPORTS] conf={analysis.confidence} | "
+                    f"YES={market.yes_price:.2f} | {analysis.summary[:120]}"
+                ),
+            )
+
+            position = self.paper_trader.execute_decision(decision)
+            if position:
+                self._sports_trade_ids.add(position.trade_id)
+                slots -= 1
+                self._log.info(
+                    "SPORTS trade abierto: '{}' | NO@{:.4f} | conf={} | "
+                    "SL={:.4f} TP={:.4f} | size=€{:.2f}",
+                    market.question[:40],
+                    no_price,
+                    analysis.confidence,
+                    sl_price,
+                    tp_price,
+                    cfg.position_size_eur,
+                )
+                self.notifications.notify_trade_open(
+                    position, self.paper_trader.balance_eur
+                )
+
+    def _run_position_review(self, scanned_markets=None) -> None:
+        """Revisa posiciones abiertas y cierra las que procedan.
+
+        Args:
+            scanned_markets: mercados ya escaneados en el ciclo principal.
+                Si se pasa, se reusan (sin scan adicional). Si es None
+                (job autónomo de 15 min), se hace una consulta dirigida
+                solo a los tokens de las posiciones abiertas — sin scan
+                masivo de los 500 mercados.
+        """
+        self._position_lock.acquire()  # blocks if price monitor is mid-evaluation
+        try:
+            positions = self.paper_trader.open_positions
+            if not positions:
+                return
+
+            self._log.info(
+                "Revisando {} posición/es abierta/s", len(positions)
+            )
+
+            if scanned_markets is not None:
+                # Llamado desde el ciclo principal: reusar mercados ya fetcheados.
+                markets: list = list(scanned_markets)
+                price_map = self._build_price_map(markets)
+                # Solo buscar los tokens que no pasaron los filtros del scan.
+                tokens_to_fetch = [
+                    p.token_id for p in positions if p.token_id not in price_map
+                ]
+            else:
+                # Job autónomo de 15 min: consulta dirigida, sin scan masivo.
+                markets = []
+                price_map = {}
+                tokens_to_fetch = [p.token_id for p in positions]
+
+            if tokens_to_fetch:
+                self._log.debug(
+                    "CLOB midpoint lookup para {} token/s de posiciones abiertas",
+                    len(tokens_to_fetch),
+                )
+                clob_prices = self.clob_client.fetch_midpoints(tokens_to_fetch)
+                price_map.update(clob_prices)
+
+            for position in positions:
+                current_price = price_map.get(position.token_id)
+                if current_price is None:
+                    settlement = self._check_market_resolution(position)
+                    if settlement is not None:
+                        self._close_resolved_position(position, settlement)
+                        continue
+                    self._log.warning(
+                        "Sin precio para token {} ({}...) — usando precio de entrada "
+                        "para revisión de SL/TP",
+                        position.token_id[:10],
+                        position.market_question[:30],
+                    )
+                    current_price = position.entry_price
+
+                # Obtener análisis fresco si hay noticias recientes
+                keywords = extract_keywords(position.market_question)
+                articles = self.news_ingestor.fetch(keywords, max_articles=5)
+                market_snap = next(
+                    (m for m in markets if m.yes_token_id == position.token_id
+                     or m.no_token_id == position.token_id),
+                    None,
+                )
+                new_analysis = None
+                if market_snap and articles:
+                    new_analysis = self.sentiment_analyzer.analyze(
+                        market_snap, articles
+                    )
+
+                close_decision = self.decision_engine.evaluate_open_position(
+                    position=position,
+                    current_price=current_price,
+                    new_analysis=new_analysis,
+                )
+
+                if close_decision.should_close:
+                    closed = self.paper_trader.close_position(
+                        trade_id=position.trade_id,
+                        current_market_price=current_price,
+                        reason=close_decision.reason or CloseReason.MANUAL,
+                        notes=close_decision.notes,
+                    )
+                    if closed:
+                        if close_decision.reason and "STOP" in close_decision.reason.value:
+                            self.notifications.notify_stop_loss(
+                                closed, self.paper_trader.balance_eur
+                            )
+                        else:
+                            self.notifications.notify_trade_close(
+                                closed, self.paper_trader.balance_eur
+                            )
+                else:
+                    self._log.debug(
+                        "Posición {} mantenida | precio={:.4f} | P&L={:+.2%}",
+                        position.trade_id[:8],
+                        current_price,
+                        close_decision.pnl_pct,
+                    )
+
+            self._check_drawdown()
+
+        except Exception as exc:
+            self._log.error("Error en revisión de posiciones: {}", exc, exc_info=True)
+            self.notifications.notify_error("position_review", str(exc))
+        finally:
+            self._position_lock.release()
+
+    def _run_daily_report(self) -> None:
+        """Genera el reporte Excel y envía resumen a Discord."""
+        try:
+            self._log.info("Generando reporte diario...")
+            today = datetime.now(timezone.utc)
+            report_path = self.report_generator.generate_daily_report(today)
+
+            # Calcular KPIs básicos para el resumen de Discord
+            balance_history = self.db.get_balance_history()
+            from src.report_generator import ReportGenerator
+            from datetime import time, timedelta
+
+            day_start = datetime.combine(
+                today.date(), time.min, tzinfo=timezone.utc
+            )
+            day_end = day_start + timedelta(days=1)
+
+            bal_start, bal_end = ReportGenerator._get_day_balance_bounds(
+                balance_history, day_start, day_end
+            )
+            total_pnl = bal_end - bal_start
+
+            all_trades = self.db.get_all_trades()
+            closed_today = [
+                t for t in all_trades
+                if t.exit_timestamp and day_start <= t.exit_timestamp <= day_end
+            ]
+            winners = [t for t in closed_today if (t.pnl_eur or 0) > 0]
+            win_rate = len(winners) / len(closed_today) if closed_today else 0.0
+
+            self.notifications.notify_daily_summary(
+                date_str=today.strftime("%Y-%m-%d"),
+                balance_start=bal_start,
+                balance_end=bal_end,
+                total_pnl=total_pnl,
+                num_trades=len(closed_today),
+                win_rate=win_rate,
+                report_path=str(report_path),
+            )
+            self._log.info("Reporte diario generado: {}", report_path)
+
+        except Exception as exc:
+            self._log.error("Error generando reporte: {}", exc, exc_info=True)
+            self.notifications.notify_error("daily_report", str(exc))
+
+    # =====================================================
+    # Helpers
+    # =====================================================
+
+    def _build_price_map(self, markets) -> dict[str, float]:
+        """Construye {token_id: precio} para los mercados activos."""
+        price_map: dict[str, float] = {}
+        for m in markets:
+            price_map[m.yes_token_id] = m.yes_price
+            price_map[m.no_token_id] = m.no_price
+        return price_map
+
+    def _check_market_resolution(self, position) -> float | None:
+        """Si el token de la posición está muerto (404), intenta resolver el mercado
+        vía Gamma API. El timer de zombie arranca en la PRIMERA detección y nunca
+        se resetea por respuestas intermedias de Gamma — evita el bug donde
+        outcomePrices en estado pendiente reiniciaba el countdown indefinidamente.
+
+        Returns:
+            1.0  — lado comprado ganó
+            0.0  — lado comprado perdió
+            None — no resuelto / force-close ya gestionado internamente
+        """
+        from src.clob_client import _DEAD_TOKENS
+        if position.token_id not in _DEAD_TOKENS:
+            return None
+
+        now = time.time()
+
+        # Timer de zombie: arranca en la primera detección, nunca se resetea
+        # por respuestas Gamma intermedias — solo se borra al cerrar la posición.
+        zombie_since = self._zombie_since.setdefault(position.token_id, now)
+        zombie_elapsed = now - zombie_since
+
+        # Force-close check: runs every tick once threshold is exceeded
+        if zombie_elapsed >= 600:
+            self._log.warning(
+                "ZOMBIE FORCE-CLOSE: '{}' — {:.0f}min sin resolución. "
+                "Cerrando a precio de entrada.",
+                position.market_question[:50],
+                zombie_elapsed / 60,
+            )
+            closed = self.paper_trader.close_position(
+                trade_id=position.trade_id,
+                current_market_price=position.entry_price,
+                reason=CloseReason.MANUAL,
+                notes="Zombie force-close: CLOB 404, market unresolvable after 10min",
+            )
+            if closed:
+                self.notifications.notify_trade_close(
+                    closed, self.paper_trader.balance_eur
+                )
+            self._zombie_since.pop(position.token_id, None)
+            self._resolution_last_check.pop(position.token_id, None)
+            return None
+
+        # Throttle Gamma API calls to once per 60s per token
+        last = self._resolution_last_check.get(position.token_id, 0.0)
+        if now - last < 60.0:
+            return None
+        self._resolution_last_check[position.token_id] = now
+
+        raw = self.market_scanner.client.fetch_market_by_token_id_raw(
+            position.token_id
+        )
+        if raw is None:
+            self._log.warning(
+                "Token {}... ('{}') zombie | Gamma sin datos | {:.0f}s / 600s",
+                position.token_id[:12],
+                position.market_question[:30],
+                zombie_elapsed,
+            )
+            return None
+
+        # Gamma devolvió datos — intentar detectar resolución
+        # NO reseteamos zombie_since aquí: si los outcomePrices son intermedios,
+        # el countdown continúa hasta el force-close.
+        from src.market_scanner import MarketScanner
+        yes_price, _ = MarketScanner._parse_price_pair(raw.get("outcomePrices"))
+        if yes_price is None:
+            self._log.warning(
+                "Token {}... ('{}') zombie | Gamma OK pero sin outcomePrices | {:.0f}s / 600s",
+                position.token_id[:12],
+                position.market_question[:30],
+                zombie_elapsed,
+            )
+            return None
+
+        if yes_price >= 0.95:
+            yes_won = True
+        elif yes_price <= 0.05:
+            yes_won = False
+        else:
+            self._log.warning(
+                "Token {}... ('{}') zombie | outcomePrices={:.3f} (pendiente) | {:.0f}s / 600s",
+                position.token_id[:12],
+                position.market_question[:30],
+                yes_price,
+                zombie_elapsed,
+            )
+            return None  # Gamma still showing intermediate — countdown continues
+
+        self._log.info(
+            "Resolución detectada — token {}... | '{}' | YES={:.3f} ({})",
+            position.token_id[:12],
+            position.market_question[:40],
+            yes_price,
+            "YES ganó" if yes_won else "NO ganó",
+        )
+        self._zombie_since.pop(position.token_id, None)
+        self._resolution_last_check.pop(position.token_id, None)
+
+        if position.side == TradeSide.BUY_YES:
+            return 1.0 if yes_won else 0.0
+        else:  # BUY_NO
+            return 0.0 if yes_won else 1.0
+
+    def _close_resolved_position(self, position, settlement: float) -> None:
+        """Cierra una posición con el precio de resolución y notifica."""
+        pnl_pct = (settlement - position.entry_price) / position.entry_price
+        outcome = "GANADA" if settlement >= 0.99 else "PERDIDA"
+        self._log.info(
+            "Mercado resuelto — posición {} | {} | settlement={:.3f} | "
+            "entry={:.4f} | P&L={:+.1%}",
+            outcome,
+            position.market_question[:50],
+            settlement,
+            position.entry_price,
+            pnl_pct,
+        )
+        closed = self.paper_trader.close_position(
+            trade_id=position.trade_id,
+            current_market_price=settlement,
+            reason=CloseReason.MARKET_RESOLVED,
+            notes=f"Market resolved — settlement {settlement:.3f}",
+        )
+        if closed:
+            self.notifications.notify_trade_close(
+                closed, self.paper_trader.balance_eur
+            )
+
+    def _check_drawdown(self) -> None:
+        """Checks drawdown and notifies — at most once every 24 hours."""
+        status = self.risk_manager.update_balance_and_check_drawdown(
+            self.paper_trader.balance_eur
+        )
+
+        _24H = 86_400.0
+        now = time.time()
+        cooldown_active = (now - self._last_drawdown_alert_ts) < _24H
+
+        if status.threshold_breached and not cooldown_active:
+            self._last_drawdown_alert_ts = now
+            self.notifications.notify_drawdown_warning(
+                current_balance=status.current_balance_eur,
+                peak_balance=status.peak_balance_eur,
+                drawdown_pct=status.current_drawdown_pct,
+            )
+
+        if status.bot_should_pause and self.risk_manager.is_paused:
+            self.notifications.notify_bot_paused(
+                reason=self.risk_manager.pause_reason or "Drawdown máximo alcanzado",
+                balance=self.paper_trader.balance_eur,
+            )
+
+
+# =====================================================
+# Entry point
+# =====================================================
+
+
+def setup_logging(config: BotConfig) -> None:
+    """Configure loguru with color-coded console output and clean file logs."""
+    import logging
+    import sys
+    from pathlib import Path as P
+
+    log_dir = P(config.logging.log_directory)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.remove()
+
+    # ── Silence noisy third-party stdlib loggers ──────────────────────────────
+    for lib in ("apscheduler", "urllib3", "httpx", "asyncio", "watchdog",
+                "telethon", "requests", "hpack", "charset_normalizer"):
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # ── Shared filter: adds a default module name for unbound loggers ─────────
+    def _ensure_module(record: dict) -> bool:
+        record["extra"].setdefault("module", record["name"].split(".")[-1][:18])
+        return True
+
+    # ── Console format (color-coded by level, module in cyan) ─────────────────
+    # Colors are driven by loguru's <level> tag (INFO=green, WARNING=yellow,
+    # ERROR=red, DEBUG=blue). Module name always cyan for easy scanning.
+    FMT_CONSOLE = (
+        "<green>{time:HH:mm:ss}</green>"
+        "  <level>{level: <8}</level>"
+        "  <cyan>{extra[module]:<18}</cyan>"
+        "  {message}"
+    )
+
+    # ── File format (plain text, full timestamp, source location) ─────────────
+    FMT_FILE = (
+        "{time:YYYY-MM-DD HH:mm:ss.SSS}"
+        " | {level: <8}"
+        " | {extra[module]:<18}"
+        " | {name}:{line}"
+        " | {message}"
+    )
+
+    logger.add(
+        sys.stdout,
+        level="INFO",
+        format=FMT_CONSOLE,
+        colorize=True,
+        filter=_ensure_module,
+    )
+
+    logger.add(
+        str(log_dir / "bot.log"),
+        level=config.logging.level,
+        format=FMT_FILE,
+        rotation=f"{config.logging.rotation_size_mb} MB",
+        retention=f"{config.logging.retention_days} days",
+        encoding="utf-8",
+        filter=_ensure_module,
+    )
+
+    if config.logging.log_llm_decisions:
+        logger.add(
+            str(log_dir / "llm_decisions.log"),
+            level="DEBUG",
+            format=FMT_FILE,
+            filter=lambda r: r["extra"].get("module") in (
+                "sentiment_analyzer", "decision_engine"
+            ),
+            rotation="50 MB",
+            retention="30 days",
+            encoding="utf-8",
+        )
+
+
+def main() -> None:
+    """Punto de entrada principal del bot."""
+    config = load_config()
+
+    # Setup logging primero para capturar todo
+    setup_logging(config)
+    log = logger.bind(module="main")
+
+    # Validar secrets
+    errors = validate_secrets(config)
+    if errors:
+        for err in errors:
+            log.error("Config error: {}", err)
+        log.error("Abortando por errores de configuración.")
+        sys.exit(1)
+
+    log.info("Configuración cargada. Provider LLM: {} ({})",
+             config.llm.provider, config.llm.model)
+
+    # Crear y arrancar el orchestrator
+    orchestrator = Orchestrator(config)
+    orchestrator.start()
+
+
+if __name__ == "__main__":
+    main()

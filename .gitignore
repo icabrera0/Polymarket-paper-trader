@@ -1,0 +1,78 @@
+# =====================================================
+# Polymarket Paper Trading Bot - .gitignore
+# =====================================================
+
+# --- Secrets ---
+.env
+.env.local
+*.key
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Generated data & runtime state ---
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+data/cache/
+data/overrides.json
+
+# --- Session tokens (sensitive — never commit) ---
+data/*.session
+data/*.session-journal
+
+# --- Logs ---
+logs/*.log
+logs/*.log.*
+
+# --- Reports ---
+reports/
+
+# --- Context & generated docs ---
+CONTEXT.md
+
+# --- Cache ---
+**/__pycache__/
+**/*.pyc
+.cache/
+*.cache
+
+# --- IDEs & tools ---
+.vscode/
+.idea/
+.claude/
+
+# --- Bundled archives ---
+files/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Temporales ---
+*.bak
+*.tmp
+*.old
