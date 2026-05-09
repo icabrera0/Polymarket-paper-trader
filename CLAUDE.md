@@ -73,7 +73,7 @@ Secrets go in `.env` only — never in the YAML.
 
 ## Critical conventions
 
-- **Enum values are stored in SQLite as-is.** `COMPRAR_YES`, `COMPRAR_NO`, `ESPERAR`, `INMEDIATO`, `HORAS`, `DIAS`, `DESCONOCIDO` are the DB-persisted strings. Do not rename them without a migration.
+- **Enum values are stored in SQLite as-is.** `BUY_YES`, `BUY_NO`, `WAIT`, `IMMEDIATE`, `HOURS`, `DAYS`, `UNKNOWN` are the DB-persisted strings. Do not rename them without a migration.
 - **`data/overrides.json`** bridges dashboard ↔ bot at runtime. Dashboard writes it; orchestrator reads it each cycle.
 - **`pause_on_drawdown: false`** in settings means the drawdown alert is monitoring-only — bot never auto-pauses unless set to `true`.
 - **Telegram session tokens** (`data/*.session`) are sensitive — grant full account access. Always excluded from git.
