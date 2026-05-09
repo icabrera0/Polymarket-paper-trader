@@ -15,7 +15,7 @@ Conventions:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -402,3 +402,51 @@ class TradeDecision(BaseModel):
     @property
     def should_execute(self) -> bool:
         return self.action == DecisionAction.OPEN_TRADE
+
+
+# =====================================================
+# Compound layer models (learning / post-mortem)
+# =====================================================
+
+
+class FailureCategory(str, Enum):
+    BAD_PREDICTION  = "BAD_PREDICTION"
+    BAD_TIMING      = "BAD_TIMING"
+    BAD_EXECUTION   = "BAD_EXECUTION"
+    EXTERNAL_SHOCK  = "EXTERNAL_SHOCK"
+    NOT_A_LOSS      = "NOT_A_LOSS"
+
+
+class PostMortem(BaseModel):
+    trade_id:          str
+    failure_category:  FailureCategory
+    root_cause:        str = Field(max_length=300)
+    lesson:            str = Field(max_length=200)
+    market_slug:       str = ""
+    predicted_prob:    float = 0.0
+    actual_outcome:    Optional[bool] = None
+    pnl_pct:           float = 0.0
+    time_held_hours:   float = 0.0
+    created_at:        datetime = Field(default_factory=_now_utc)
+
+
+class KnowledgeBaseEntry(BaseModel):
+    id:               str = Field(default_factory=lambda: str(uuid.uuid4()))
+    market_pattern:   str
+    lesson:           str
+    failure_category: FailureCategory
+    confidence:       float = Field(ge=0.0, le=1.0, default=0.4)
+    times_confirmed:  int = 0
+    created_at:       datetime = Field(default_factory=_now_utc)
+    updated_at:       datetime = Field(default_factory=_now_utc)
+
+
+class PerformanceSnapshot(BaseModel):
+    snapshot_date:  date
+    win_rate:       float = 0.0
+    sharpe_ratio:   float = 0.0
+    max_drawdown:   float = 0.0
+    profit_factor:  float = 0.0
+    brier_score:    float = 0.0
+    total_trades:   int = 0
+    open_positions: int = 0

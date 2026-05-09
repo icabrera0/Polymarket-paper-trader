@@ -1194,6 +1194,141 @@ def render_analyses(db: Database) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
 
+# ── Learnings Tab ─────────────────────────────────────────────────────────────
+
+_REPORT_FILE = PROJECT_ROOT / "data" / "llm_report.md"
+_OUTCOMES_FILE = PROJECT_ROOT / "data" / "llm_outcomes.jsonl"
+
+
+def render_learnings(db: Database) -> None:
+    st.markdown(
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:1rem;">'
+        'Performance &amp; Learnings</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Performance metrics ───────────────────────────────────────────────────
+    st.markdown(_sh("Latest Performance Snapshot"), unsafe_allow_html=True)
+    try:
+        snap = db.get_latest_performance_snapshot()
+    except Exception:
+        snap = None
+
+    if snap:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Win Rate", f"{snap.win_rate:.1%}")
+        c2.metric("Sharpe", f"{snap.sharpe_ratio:.2f}")
+        c3.metric("Profit Factor", f"{snap.profit_factor:.2f}")
+        c4.metric("Max Drawdown", f"{snap.max_drawdown:.1%}")
+        c5.metric("Trades (90d)", snap.total_trades)
+    else:
+        st.info("No performance snapshot yet — nightly consolidation runs at 23:55.")
+
+    # ── Performance history chart ─────────────────────────────────────────────
+    try:
+        history = db.get_performance_history(days=90)
+    except Exception:
+        history = []
+
+    if len(history) >= 2:
+        st.markdown(_sh("Win Rate History (90d)"), unsafe_allow_html=True)
+        dates = [str(s.snapshot_date) for s in history]
+        win_rates = [s.win_rate * 100 for s in history]
+        fig = go.Figure(go.Scatter(
+            x=dates, y=win_rates,
+            mode="lines+markers",
+            line=dict(color="#2563EB", width=2),
+            marker=dict(size=6, color="#2563EB"),
+            fill="tozeroy",
+            fillcolor="rgba(37,99,235,0.08)",
+        ))
+        fig.add_hline(y=50, line_dash="dash", line_color="#CBD5E1",
+                      annotation_text="50% breakeven", annotation_position="right")
+        _chart_style(fig, height=180)
+        fig.update_layout(yaxis_title="Win rate %", yaxis_range=[0, 100])
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Knowledge base ────────────────────────────────────────────────────────
+    st.markdown(_sh("Knowledge Base", "(lessons from past trades)"), unsafe_allow_html=True)
+    try:
+        entries = db.get_knowledge_base(limit=100)
+    except Exception:
+        entries = []
+
+    if entries:
+        kb_data = [{
+            "Pattern":    e.market_pattern[:45],
+            "Lesson":     e.lesson[:70],
+            "Category":   e.failure_category.value,
+            "Confidence": f"{e.confidence:.0%}",
+            "Confirmed":  e.times_confirmed,
+            "Updated":    str(e.updated_at)[:10],
+        } for e in entries]
+        st.dataframe(pd.DataFrame(kb_data), use_container_width=True, height=300)
+
+        # Category breakdown bar
+        from collections import Counter
+        cats = Counter(e.failure_category.value for e in entries)
+        color_map = {
+            "BAD_PREDICTION":  "#E11D48",
+            "BAD_TIMING":      "#D97706",
+            "BAD_EXECUTION":   "#7C3AED",
+            "EXTERNAL_SHOCK":  "#0891B2",
+            "NOT_A_LOSS":      "#16A34A",
+        }
+        fig2 = go.Figure(go.Bar(
+            x=list(cats.keys()), y=list(cats.values()),
+            marker_color=[color_map.get(k, "#8A96A8") for k in cats.keys()],
+            marker_line_width=0, marker_cornerradius=4,
+            text=list(cats.values()), textposition="outside",
+            textfont=dict(color="#8A96A8", size=11),
+        ))
+        _chart_style(fig2, height=180)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No lessons yet — lessons are generated automatically after each trade closes.")
+
+    # ── Recent post-mortems ───────────────────────────────────────────────────
+    st.markdown(_sh("Recent Post-Mortems"), unsafe_allow_html=True)
+    if _OUTCOMES_FILE.exists():
+        try:
+            lines = _OUTCOMES_FILE.read_text(encoding="utf-8").splitlines()[-20:]
+            if lines:
+                records = []
+                for raw in reversed(lines):
+                    try:
+                        r = json.loads(raw)
+                        records.append({
+                            "Date":     r.get("ts", "")[:10],
+                            "Market":   r.get("market_slug", "")[:35],
+                            "Side":     r.get("side", ""),
+                            "P&L":      fmt_pct(float(r.get("pnl_pct", 0))),
+                            "Category": r.get("failure_category", ""),
+                            "Lesson":   r.get("lesson", "")[:60],
+                        })
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                if records:
+                    st.dataframe(pd.DataFrame(records), use_container_width=True, height=250)
+            else:
+                st.info("No outcomes recorded yet.")
+        except OSError:
+            st.info("Outcomes file not readable.")
+    else:
+        st.info("No outcomes recorded yet — outcomes are appended after each trade closes.")
+
+    # ── Report file link ──────────────────────────────────────────────────────
+    st.markdown(_sh("Human-Readable Report"), unsafe_allow_html=True)
+    if _REPORT_FILE.exists():
+        report_text = _REPORT_FILE.read_text(encoding="utf-8")
+        with st.expander("View llm_report.md", expanded=False):
+            st.markdown(report_text)
+        st.caption(f"File: `{_REPORT_FILE}` — updated nightly and after each trade closes.")
+    else:
+        st.info("`data/llm_report.md` will appear here after the first trade closes or nightly consolidation runs.")
+
+
 # ── Balance Manager Tab ───────────────────────────────────────────────────────
 
 def render_balance_manager(db: Database, config) -> None:
@@ -1429,6 +1564,7 @@ def main() -> None:
         "LLM Analysis",
         "Balance",
         "Backtest",
+        "Learnings",
     ])
 
     with tabs[0]: render_overview(db, config)
@@ -1437,6 +1573,7 @@ def main() -> None:
     with tabs[3]: render_analyses(db)
     with tabs[4]: render_balance_manager(db, config)
     with tabs[5]: render_backtest(config)
+    with tabs[6]: render_learnings(db)
 
     db.close()
 

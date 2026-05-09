@@ -32,7 +32,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from src.compound import CompoundEngine
 
 from loguru import logger
 
@@ -314,10 +317,12 @@ class SentimentAnalyzer:
         self,
         config: BotConfig,
         client: Optional[LLMClient] = None,
+        compound: Optional["CompoundEngine"] = None,
     ) -> None:
         self.config = config
         self.client = client if client is not None else build_llm_client(config)
         self.cfg_llm = config.llm
+        self.compound = compound
 
         # Cache: hash → (timestamp, analysis)
         self._cache: dict[str, tuple[float, MarketAnalysis]] = {}
@@ -624,6 +629,13 @@ class SentimentAnalyzer:
         articles: list[NewsArticle],
     ) -> MarketAnalysis:
         user_prompt = build_user_prompt(market, articles)
+        # Inject relevant KB lessons if the compound engine is available
+        if self.compound is not None:
+            lessons = self.compound.get_relevant_lessons(
+                market.question, market.slug
+            )
+            if lessons:
+                user_prompt = user_prompt + "\n\n" + lessons
         parsed, meta = self.client.complete_json(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,

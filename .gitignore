@@ -64,6 +64,9 @@ CONTEXT.md
 # --- Mulch (local expertise store — stays local) ---
 .mulch/
 node_modules/
+
+# --- Overstory (multi-agent scaffolding — local only) ---
+.overstory/
 package.json
 package-lock.json
 

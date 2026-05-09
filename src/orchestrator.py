@@ -50,6 +50,7 @@ from src.notification_system import NotificationSystem
 from src.paper_trader import PaperTrader
 from src.report_generator import ReportGenerator
 from src.risk_manager import RiskManager
+from src.compound import CompoundEngine
 from src.sentiment_analyzer import SentimentAnalyzer
 
 
@@ -125,7 +126,8 @@ class Orchestrator:
         self.paper_trader = PaperTrader(config, self.risk_manager, self.db)
         self.market_scanner = MarketScanner(config)
         self.news_ingestor = NewsIngestor(config)
-        self.sentiment_analyzer = SentimentAnalyzer(config)
+        self.compound = CompoundEngine(config, self.db)
+        self.sentiment_analyzer = SentimentAnalyzer(config, compound=self.compound)
         self.decision_engine = DecisionEngine(config, self.risk_manager)
         self.report_generator = ReportGenerator(config, self.db)
         self.notifications = NotificationSystem(config)
@@ -327,6 +329,13 @@ class Orchestrator:
                 self._log.warning(
                     "Bot paused due to drawdown. Skipping cycle. "
                     "Use 'python scripts/manage_balance.py status' to review."
+                )
+                return
+
+            # 1b) Compound drawdown guard (8% — tighter than config alert threshold)
+            if self.compound.drawdown_guard():
+                self._log.warning(
+                    "Compound drawdown guard active (>8%). No new trades this cycle."
                 )
                 return
 
@@ -583,6 +592,7 @@ class Orchestrator:
                         notes=close_decision.notes,
                     )
                     if closed:
+                        self.compound.run_post_mortem(closed)
                         if close_decision.reason and "STOP" in close_decision.reason.value:
                             self.notifications.notify_stop_loss(
                                 closed, self.paper_trader.balance_eur
@@ -792,6 +802,7 @@ class Orchestrator:
                         notes=close_decision.notes,
                     )
                     if closed:
+                        self.compound.run_post_mortem(closed)
                         if close_decision.reason and "STOP" in close_decision.reason.value:
                             self.notifications.notify_stop_loss(
                                 closed, self.paper_trader.balance_eur
@@ -817,9 +828,13 @@ class Orchestrator:
             self._position_lock.release()
 
     def _run_daily_report(self) -> None:
-        """Generates the Excel report and sends a summary to Discord."""
+        """Generates the Excel report, runs compound consolidation, and notifies Discord."""
         try:
             self._log.info("Generating daily report...")
+            # Compound layer: compute metrics, prune KB, rebuild llm_report.md
+            self.compound.nightly_consolidation(
+                open_positions_count=self.paper_trader.num_open_positions
+            )
             today = datetime.now(timezone.utc)
             report_path = self.report_generator.generate_daily_report(today)
 
@@ -910,6 +925,7 @@ class Orchestrator:
                 notes="Zombie force-close: CLOB 404, market unresolvable after 10min",
             )
             if closed:
+                self.compound.run_post_mortem(closed)
                 self.notifications.notify_trade_close(
                     closed, self.paper_trader.balance_eur
                 )
@@ -998,6 +1014,7 @@ class Orchestrator:
             notes=f"Market resolved — settlement {settlement:.3f}",
         )
         if closed:
+            self.compound.run_post_mortem(closed)
             self.notifications.notify_trade_close(
                 closed, self.paper_trader.balance_eur
             )
