@@ -61,6 +61,12 @@ CONTEXT.md
 .idea/
 .claude/
 
+# --- Mulch (local expertise store — stays local) ---
+.mulch/
+node_modules/
+package.json
+package-lock.json
+
 # --- Bundled archives ---
 files/
 *.swp
