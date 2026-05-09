@@ -6,7 +6,7 @@ asks Claude for a structured quantitative analysis:
 - consensus YES probability
 - edge over the current price
 - aggregated sentiment and impact magnitude
-- recommendation: COMPRAR_YES / COMPRAR_NO / ESPERAR / INSUFFICIENT_DATA
+- recommendation: BUY_YES / BUY_NO / WAIT / INSUFFICIENT_DATA
 - timeframe and possible contradictions between sources
 
 Design:
@@ -58,7 +58,7 @@ from src.models import (
 MAX_FRESH_AGE_HOURS = 48.0
 
 # Minimum edge for a trade to be worth recommending. Below this we
-# recommend ESPERAR even if the LLM says otherwise.
+# recommend WAIT even if the LLM says otherwise.
 MIN_EDGE_FOR_TRADE = 0.05
 
 
@@ -70,8 +70,8 @@ SYSTEM_PROMPT = """You are a risk-first quantitative analyst for a Polymarket tr
 
 HOW THIS BOT TRADES:
 - Binary markets: YES token + NO token, each priced 0.0–1.0 (= implied probability)
-- COMPRAR_YES: buy YES tokens → profit when the event occurs
-- COMPRAR_NO: buy NO tokens → profit when the event does NOT occur
+- BUY_YES: buy YES tokens → profit when the event occurs
+- BUY_NO: buy NO tokens → profit when the event does NOT occur
 - Stop loss: −20% on token price. Take profit: +30% on token price.
   Example: entry YES=0.60 → SL at 0.48, TP at 0.78. The edge must hold long enough to reach TP.
 - Your confidence (0–100) directly scales position size. Assign it as if it were Kelly fraction quality.
@@ -88,33 +88,33 @@ RISK RULES — apply every rule before writing output:
 
 3. NEWS AGE PENALTY
    Each article older than 24h: subtract 5 from confidence.
-   If ALL articles are older than 24h: cap confidence at 50 and default to ESPERAR.
+   If ALL articles are older than 24h: cap confidence at 50 and default to WAIT.
 
 4. SINGLE-SOURCE PENALTY
    If only one source makes the key claim: cap confidence at 55. Markets move on consensus, not single reports.
 
 5. CONTRADICTORY SIGNALS
-   If credible sources disagree on the outcome: set contradictory_sources=true. Default to ESPERAR unless edge exceeds 30pp and higher-quality sources are unanimous.
+   If credible sources disagree on the outcome: set contradictory_sources=true. Default to WAIT unless edge exceeds 30pp and higher-quality sources are unanimous.
 
 6. YES-BIAS CORRECTION — MANDATORY
    You have a structural YES bias because the question asks "will X happen?" — actively resist this.
-   Before COMPRAR_YES: ask "Is there a credible path to NO?"
-   Before ESPERAR: ask "Is YES so overpriced that COMPRAR_NO is the correct trade?"
+   Before BUY_YES: ask "Is there a credible path to NO?"
+   Before WAIT: ask "Is YES so overpriced that BUY_NO is the correct trade?"
 
-   HIGH-YES markets (YES price 0.65–0.95) are prime COMPRAR_NO targets when any bearish news exists.
+   HIGH-YES markets (YES price 0.65–0.95) are prime BUY_NO targets when any bearish news exists.
    A YES=0.80 market only needs to drop to YES=0.70 for NO holders to gain +50%.
 
-   Bearish signals → support COMPRAR_NO: deal fell through, deadline extended, vote postponed, reversed decision, court ruling against, negotiations stalled, permit denied, candidacy withdrawn, unexpected obstacle, key figure resigned.
-   Bullish signals → support COMPRAR_YES: official confirmation, early completion, regulatory approval granted, accelerated timeline, multiple independent sources confirm.
+   Bearish signals → support BUY_NO: deal fell through, deadline extended, vote postponed, reversed decision, court ruling against, negotiations stalled, permit denied, candidacy withdrawn, unexpected obstacle, key figure resigned.
+   Bullish signals → support BUY_YES: official confirmation, early completion, regulatory approval granted, accelerated timeline, multiple independent sources confirm.
 
 7. EDGE AND WIN-RATE DISCIPLINE
    Only recommend a trade when |consensus_probability_yes − current_yes_price| ≥ 0.05 AND confidence ≥ 60.
-   Edges of 0.05–0.08 with confidence below 70 MUST result in ESPERAR — the SL will trigger before the TP on marginal edges.
-   ESPERAR is always the correct conservative output. Never force a trade to avoid INSUFFICIENT_DATA.
+   Edges of 0.05–0.08 with confidence below 70 MUST result in WAIT — the SL will trigger before the TP on marginal edges.
+   WAIT is always the correct conservative output. Never force a trade to avoid INSUFFICIENT_DATA.
    A skipped trade costs nothing. A wrong high-confidence trade costs the maximum position size.
 
 8. MATCH MARKETS — NEVER TRADE
-   If the market is a head-to-head between two named teams or players — any format like "Team A vs Team B", "Player X vs Player Y", or league match markets (IPL, Premier League, ATP, NBA game-level markets, etc.) — output ESPERAR regardless of any other analysis.
+   If the market is a head-to-head between two named teams or players — any format like "Team A vs Team B", "Player X vs Player Y", or league match markets (IPL, Premier League, ATP, NBA game-level markets, etc.) — output WAIT regardless of any other analysis.
    Why this rule is absolute:
    - These markets are in-play: prices move in seconds as scores change, not in hours.
    - Your news sources are hours behind the live action; your probability estimate is stale the moment the match starts.
@@ -129,8 +129,8 @@ OUTPUT — return a single JSON object only. No preamble. No markdown. No code f
   "confidence": 0,
   "sentiment_score": 0.0,
   "impact_score": 0.0,
-  "recommendation": "ESPERAR",
-  "timeframe": "DESCONOCIDO",
+  "recommendation": "WAIT",
+  "timeframe": "UNKNOWN",
   "contradictory_sources": false,
   "summary": "...",
   "justification": "..."
@@ -141,17 +141,17 @@ FIELD DEFINITIONS:
 - confidence: int [0–100] — Kelly-fraction quality. 80+ means you would stake 80%+ of your bankroll. Hard ceiling: 85.
 - sentiment_score: float [-1.0 to +1.0] — -1 = strongly bearish for YES, +1 = strongly bullish for YES
 - impact_score: float [0–100] — how much this news should shift the market price
-- recommendation: exactly one of "COMPRAR_YES" | "COMPRAR_NO" | "ESPERAR" | "INSUFFICIENT_DATA"
-- timeframe: exactly one of "INMEDIATO" | "HORAS" | "DIAS" | "DESCONOCIDO"
+- recommendation: exactly one of "BUY_YES" | "BUY_NO" | "WAIT" | "INSUFFICIENT_DATA"
+- timeframe: exactly one of "IMMEDIATE" | "HOURS" | "DAYS" | "UNKNOWN"
 - contradictory_sources: bool — true if any meaningful source contradicts the dominant signal
 - summary: 2–3 sentences describing what the news says and the key evidence found
 - justification: 1 paragraph that MUST include: (a) your edge calculation — your probability vs the market price, (b) which risk rules were triggered, (c) why the recommendation follows from them
 
 DECISION RULES:
 - "INSUFFICIENT_DATA" — fewer than 2 relevant articles, or articles do not address the market question directly
-- "ESPERAR" — |edge| < 0.05, OR confidence < 60, OR contradictory sources without dominant evidence, OR news too old
-- "COMPRAR_YES" — consensus_probability_yes >= current_yes_price + 0.05 AND confidence >= 60. Buy YES tokens.
-- "COMPRAR_NO" — consensus_probability_yes <= current_yes_price - 0.05 AND confidence >= 60. Buy NO tokens. This is the correct trade when YES is overpriced — not a contrarian bet.
+- "WAIT" — |edge| < 0.05, OR confidence < 60, OR contradictory sources without dominant evidence, OR news too old
+- "BUY_YES" — consensus_probability_yes >= current_yes_price + 0.05 AND confidence >= 60. Buy YES tokens.
+- "BUY_NO" — consensus_probability_yes <= current_yes_price - 0.05 AND confidence >= 60. Buy NO tokens. This is the correct trade when YES is overpriced — not a contrarian bet.
 
 Respond with ONLY the JSON object."""
 
@@ -160,27 +160,27 @@ SPORTS_SYSTEM_PROMPT = """You are a quantitative sports trading analyst for a Po
 
 CONTEXT:
 - YES token = the named team/player wins. NO token = they do NOT win (underdog wins).
-- You ONLY recommend buying NO. COMPRAR_YES is never valid in this context.
+- You ONLY recommend buying NO. BUY_YES is never valid in this context.
 - Example payoff: buy NO at 0.15 — if underdog wins: +567%. If favorite wins: -100%.
 
 RULES — apply in numbered order. Stop at the first rule that fails.
 
 1. FRESHNESS GATE: Scan all articles for any published within the last 60 minutes that explicitly name today's match, the competing teams, or the competing players. If none found, output INSUFFICIENT_DATA and stop. Pre-match previews, H2H stats, and general league news do not count.
 
-2. ODDS RANGE: If YES price is below 0.68 or above 0.88, output ESPERAR and stop.
+2. ODDS RANGE: If YES price is below 0.68 or above 0.88, output WAIT and stop.
 
 3. SIGNAL CLASSIFICATION: Label each fresh article as strong or weak.
    Strong: injury or ejection of a key player on the favorite team during this match; live score showing underdog is currently leading or tied late in the match; confirmed momentum shift with consecutive underdog scores; objective conditions change directly impairing the favorite's play style.
    Weak: pre-match expert picks, historical stats, vague sentiment, social media hype without match-specific detail.
    If only weak signals exist, cap confidence at 55.
 
-4. CONFIDENCE: Start at 50. Add 10 for each distinct strong signal (maximum 65). If confidence is below 55, output ESPERAR and stop.
+4. CONFIDENCE: Start at 50. Add 10 for each distinct strong signal (maximum 65). If confidence is below 55, output WAIT and stop.
 
-5. EDGE CHECK: Estimate the true probability the YES side wins (consensus_probability_yes). If that value is less than 10 percentage points below the current YES price, output ESPERAR and stop.
+5. EDGE CHECK: Estimate the true probability the YES side wins (consensus_probability_yes). If that value is less than 10 percentage points below the current YES price, output WAIT and stop.
 
-6. PROFESSIONAL BETTOR CHECK: Ask "Would a sharp bettor confidently take this exact NO bet at this price, given only these articles?" If the answer is not clearly yes, output ESPERAR.
+6. PROFESSIONAL BETTOR CHECK: Ask "Would a sharp bettor confidently take this exact NO bet at this price, given only these articles?" If the answer is not clearly yes, output WAIT.
 
-7. If all rules pass, output COMPRAR_NO.
+7. If all rules pass, output BUY_NO.
 
 Return only this JSON object. No text before or after. No markdown. No code fences.
 
@@ -189,8 +189,8 @@ Return only this JSON object. No text before or after. No markdown. No code fenc
   "confidence": 0,
   "sentiment_score": 0.0,
   "impact_score": 0.0,
-  "recommendation": "ESPERAR",
-  "timeframe": "INMEDIATO",
+  "recommendation": "WAIT",
+  "timeframe": "IMMEDIATE",
   "contradictory_sources": false,
   "summary": "2-3 sentences: what the fresh articles say about this specific match",
   "justification": "(a) the specific fresh signal and its source name, (b) edge calculation: YES_price minus consensus_probability_yes, (c) which rules passed and which caused a stop"
@@ -240,8 +240,8 @@ def build_sports_user_prompt(
     parts.append(
         "Apply all 6 rules. Check for fresh match data first (Rule 1 — immediate gate). "
         "If there is a credible real-time signal that the underdog has a better chance than "
-        "the market implies, and the edge exceeds 10pp, recommend COMPRAR_NO. "
-        "Otherwise output ESPERAR or INSUFFICIENT_DATA. "
+        "the market implies, and the edge exceeds 10pp, recommend BUY_NO. "
+        "Otherwise output WAIT or INSUFFICIENT_DATA. "
         "Respond with ONLY the JSON object."
     )
     return "\n".join(parts)
@@ -295,7 +295,7 @@ def build_user_prompt(
         "Apply all 7 risk rules from the system prompt. Determine whether "
         "the TRUE probability of YES differs from the current market price by "
         "at least 5pp in either direction, with sufficient confidence to justify "
-        "a trade. Consider COMPRAR_NO equally to COMPRAR_YES — high-YES markets "
+        "a trade. Consider BUY_NO equally to BUY_YES — high-YES markets "
         "with any bearish evidence are prime NO candidates. "
         "Respond with ONLY the JSON object specified in the system prompt."
     )
@@ -513,7 +513,7 @@ class SentimentAnalyzer:
         elapsed_total = time.time() - t_batch
         with_data = sum(
             1 for r in results
-            if r.recommendation.value not in ("INSUFFICIENT_DATA", "ESPERAR")
+            if r.recommendation.value not in ("INSUFFICIENT_DATA", "WAIT")
         )
         self._log.info(
             "Parallel batch complete: {} markets in {:.1f}s | {} actionable",
@@ -526,7 +526,7 @@ class SentimentAnalyzer:
         market: MarketSnapshot,
         articles: list[NewsArticle],
     ) -> MarketAnalysis:
-        """Sports version of analysis: uses SPORTS_SYSTEM_PROMPT and only recommends COMPRAR_NO.
+        """Sports version of analysis: uses SPORTS_SYSTEM_PROMPT and only recommends BUY_NO.
 
         No cache — live sports markets change constantly.
         """
@@ -542,17 +542,17 @@ class SentimentAnalyzer:
 
         try:
             recommendation = TradeRecommendation(
-                parsed.get("recommendation", "ESPERAR")
+                parsed.get("recommendation", "WAIT")
             )
         except ValueError:
-            recommendation = TradeRecommendation.ESPERAR
+            recommendation = TradeRecommendation.WAIT
 
         # Safety: sports module never opens YES trades
-        if recommendation == TradeRecommendation.COMPRAR_YES:
+        if recommendation == TradeRecommendation.BUY_YES:
             self._log.warning(
-                "Sports LLM returned COMPRAR_YES — forcing ESPERAR (not applicable in sports)"
+                "Sports LLM returned BUY_YES — forcing WAIT (not applicable in sports)"
             )
-            recommendation = TradeRecommendation.ESPERAR
+            recommendation = TradeRecommendation.WAIT
 
         consensus = float(parsed.get("consensus_probability_yes", market.yes_price))
         consensus = max(0.0, min(1.0, consensus))
@@ -571,7 +571,7 @@ class SentimentAnalyzer:
             sentiment_score=float(parsed.get("sentiment_score", 0.0)),
             impact_score=float(parsed.get("impact_score", 0.0)),
             recommendation=recommendation,
-            timeframe=Timeframe.INMEDIATO,
+            timeframe=Timeframe.IMMEDIATE,
             contradictory_sources=bool(parsed.get("contradictory_sources", False)),
             summary=str(parsed.get("summary", ""))[:500],
             justification=str(parsed.get("justification", ""))[:1000],
@@ -632,15 +632,15 @@ class SentimentAnalyzer:
         # Parse JSON to MarketAnalysis with safe defaults
         try:
             recommendation = TradeRecommendation(
-                parsed.get("recommendation", "ESPERAR")
+                parsed.get("recommendation", "WAIT")
             )
         except ValueError:
-            recommendation = TradeRecommendation.ESPERAR
+            recommendation = TradeRecommendation.WAIT
 
         try:
-            timeframe = Timeframe(parsed.get("timeframe", "DESCONOCIDO"))
+            timeframe = Timeframe(parsed.get("timeframe", "UNKNOWN"))
         except ValueError:
-            timeframe = Timeframe.DESCONOCIDO
+            timeframe = Timeframe.UNKNOWN
 
         consensus = float(parsed.get("consensus_probability_yes", market.yes_price))
         consensus = max(0.0, min(1.0, consensus))
@@ -680,41 +680,41 @@ class SentimentAnalyzer:
         Specifically:
         - Clips out-of-range values (Pydantic already validates types but not
           arbitrary float bounds without Field constraints; we are extra careful here).
-        - If confidence < configured threshold, downgrade to ESPERAR.
-        - If absolute edge < MIN_EDGE_FOR_TRADE, downgrade to ESPERAR.
-        - If recommendation says COMPRAR_YES but edge is negative (or vice versa),
-          that is an internal LLM contradiction → ESPERAR.
+        - If confidence < configured threshold, downgrade to WAIT.
+        - If absolute edge < MIN_EDGE_FOR_TRADE, downgrade to WAIT.
+        - If recommendation says BUY_YES but edge is negative (or vice versa),
+          that is an internal LLM contradiction → WAIT.
         """
         # Confidence threshold from config
         min_conf = self.cfg_llm.min_confidence_threshold
         rec = analysis.recommendation
 
-        if rec in (TradeRecommendation.COMPRAR_YES, TradeRecommendation.COMPRAR_NO):
+        if rec in (TradeRecommendation.BUY_YES, TradeRecommendation.BUY_NO):
             if analysis.confidence < min_conf:
                 self._log.info(
-                    "Downgrade to ESPERAR: confidence {} < threshold {}",
+                    "Downgrade to WAIT: confidence {} < threshold {}",
                     analysis.confidence,
                     min_conf,
                 )
-                analysis.recommendation = TradeRecommendation.ESPERAR
+                analysis.recommendation = TradeRecommendation.WAIT
             elif abs(analysis.edge) < MIN_EDGE_FOR_TRADE:
                 self._log.info(
-                    "Downgrade to ESPERAR: |edge|={:.3f} < min={:.3f}",
+                    "Downgrade to WAIT: |edge|={:.3f} < min={:.3f}",
                     abs(analysis.edge),
                     MIN_EDGE_FOR_TRADE,
                 )
-                analysis.recommendation = TradeRecommendation.ESPERAR
+                analysis.recommendation = TradeRecommendation.WAIT
             elif (
-                rec == TradeRecommendation.COMPRAR_YES and analysis.edge < 0
+                rec == TradeRecommendation.BUY_YES and analysis.edge < 0
             ) or (
-                rec == TradeRecommendation.COMPRAR_NO and analysis.edge > 0
+                rec == TradeRecommendation.BUY_NO and analysis.edge > 0
             ):
                 self._log.warning(
-                    "LLM contradiction: rec={} but edge={:.3f}. → ESPERAR",
+                    "LLM contradiction: rec={} but edge={:.3f}. → WAIT",
                     rec.value,
                     analysis.edge,
                 )
-                analysis.recommendation = TradeRecommendation.ESPERAR
+                analysis.recommendation = TradeRecommendation.WAIT
 
         return analysis
 
@@ -743,7 +743,7 @@ class SentimentAnalyzer:
             sentiment_score=0.0,
             impact_score=0.0,
             recommendation=TradeRecommendation.INSUFFICIENT_DATA,
-            timeframe=Timeframe.DESCONOCIDO,
+            timeframe=Timeframe.UNKNOWN,
             contradictory_sources=False,
             summary=f"Insufficient data: {reason}",
             justification=reason,

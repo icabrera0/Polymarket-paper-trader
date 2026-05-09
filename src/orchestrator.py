@@ -344,7 +344,7 @@ class Orchestrator:
             )
 
             # 3b) NO-hunt: append high-YES markets specifically to find
-            #     overpriced YES / COMPRAR_NO opportunities. Markets with
+            #     overpriced YES / BUY_NO opportunities. Markets with
             #     YES >= threshold are often under-analyzed for the NO side.
             if self.config.decision.no_hunt_enabled:
                 candidate_ids = {m.market_id for m in candidates}
@@ -441,7 +441,7 @@ class Orchestrator:
 
             actionable = sum(
                 1 for a in analyses
-                if a and a.recommendation.value not in ("ESPERAR", "INSUFFICIENT_DATA")
+                if a and a.recommendation.value not in ("WAIT", "INSUFFICIENT_DATA")
             )
             self._log.info(
                 "Pipeline complete: {} markets in {:.1f}s | {} actionable",
@@ -657,7 +657,7 @@ class Orchestrator:
             self.db.log_analysis(analysis)
 
             if (
-                analysis.recommendation != TradeRecommendation.COMPRAR_NO
+                analysis.recommendation != TradeRecommendation.BUY_NO
                 or analysis.confidence < cfg.min_confidence
             ):
                 continue

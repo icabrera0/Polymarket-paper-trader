@@ -919,9 +919,9 @@ def render_analyses(db: Database) -> None:
                     unsafe_allow_html=True)
         counts     = Counter(recs)
         colors_map = {
-            "COMPRAR_YES":       "#6366F1",
-            "COMPRAR_NO":        "#F43F5E",
-            "ESPERAR":           "#F59E0B",
+            "BUY_YES":           "#6366F1",
+            "BUY_NO":            "#F43F5E",
+            "WAIT":              "#F59E0B",
             "INSUFFICIENT_DATA": "#6060A0",
         }
         fig = go.Figure(go.Bar(

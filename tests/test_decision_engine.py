@@ -55,7 +55,7 @@ def make_analysis(
     no_price: float = 0.59,
     consensus: float = 0.60,
     confidence: int = 75,
-    recommendation: TradeRecommendation = TradeRecommendation.COMPRAR_YES,
+    recommendation: TradeRecommendation = TradeRecommendation.BUY_YES,
     yes_token: str = "0xyes",
     no_token: str = "0xno",
 ) -> MarketAnalysis:
@@ -72,7 +72,7 @@ def make_analysis(
         sentiment_score=0.5,
         impact_score=70.0,
         recommendation=recommendation,
-        timeframe=Timeframe.HORAS,
+        timeframe=Timeframe.HOURS,
         contradictory_sources=False,
         summary="test",
         justification="test",
@@ -140,7 +140,7 @@ class TestPreFilters:
         assert SkipReason.LLM_INSUFFICIENT_DATA in d.skip_reasons
 
     def test_no_trade_si_esperar(self, engine):
-        a = make_analysis(recommendation=TradeRecommendation.ESPERAR)
+        a = make_analysis(recommendation=TradeRecommendation.WAIT)
         d = engine.decide(a, 150.0, [])
         assert d.action == DecisionAction.NO_TRADE
         assert SkipReason.LLM_RECOMMENDS_WAIT in d.skip_reasons
@@ -150,7 +150,7 @@ class TestPreFilters:
         d = engine.decide(a, 150.0, [], articles=[make_article()])
         assert d.action == DecisionAction.NO_TRADE
         assert SkipReason.LLM_RECOMMENDS_WAIT in d.skip_reasons
-        assert "Confianza" in d.rationale
+        assert "Confidence" in d.rationale
 
     def test_no_trade_si_edge_pequeno(self, engine):
         # consensus 0.43, price 0.40 → edge 0.03 < 0.05
@@ -229,7 +229,7 @@ class TestAntiDuplication:
             yes_price=0.40,
             consensus=0.60,
             confidence=80,
-            recommendation=TradeRecommendation.COMPRAR_YES,
+            recommendation=TradeRecommendation.BUY_YES,
         )
         d = engine.decide(a, 150.0, [existing], articles=[make_article()])
         assert d.action == DecisionAction.NO_TRADE
@@ -339,7 +339,7 @@ class TestSideResolution:
             confidence=80,
             yes_token="0xyes_token",
             no_token="0xno_token",
-            recommendation=TradeRecommendation.COMPRAR_YES,
+            recommendation=TradeRecommendation.BUY_YES,
         )
         d = engine.decide(a, 150.0, [], articles=[make_article()])
         assert d.side == TradeSide.BUY_YES
@@ -348,7 +348,7 @@ class TestSideResolution:
 
     def test_compra_no_usa_no_token_y_no_price(self, engine):
         # consensus_yes 0.20 → implicit consensus_no 0.80; price_yes 0.40 →
-        # negative edge (NO undervalued) → COMPRAR_NO
+        # negative edge (NO undervalued) → BUY_NO
         a = make_analysis(
             yes_price=0.40,
             no_price=0.59,
@@ -356,7 +356,7 @@ class TestSideResolution:
             confidence=80,
             yes_token="0xyes_token",
             no_token="0xno_token",
-            recommendation=TradeRecommendation.COMPRAR_NO,
+            recommendation=TradeRecommendation.BUY_NO,
         )
         d = engine.decide(a, 150.0, [], articles=[make_article()])
         assert d.side == TradeSide.BUY_NO
@@ -394,7 +394,7 @@ class TestEvaluateOpenPosition:
             yes_price=0.42,
             consensus=0.20,
             confidence=85,
-            recommendation=TradeRecommendation.COMPRAR_NO,
+            recommendation=TradeRecommendation.BUY_NO,
         )
         decision = engine.evaluate_open_position(
             position, current_price=0.42, new_analysis=new_a
@@ -408,7 +408,7 @@ class TestEvaluateOpenPosition:
             yes_price=0.42,
             consensus=0.20,
             confidence=50,  # < 70 → does not close
-            recommendation=TradeRecommendation.COMPRAR_NO,
+            recommendation=TradeRecommendation.BUY_NO,
         )
         decision = engine.evaluate_open_position(
             position, current_price=0.42, new_analysis=new_a
@@ -422,7 +422,7 @@ class TestEvaluateOpenPosition:
             yes_price=0.42,
             consensus=0.70,
             confidence=85,
-            recommendation=TradeRecommendation.COMPRAR_YES,
+            recommendation=TradeRecommendation.BUY_YES,
         )
         decision = engine.evaluate_open_position(
             position, current_price=0.42, new_analysis=new_a

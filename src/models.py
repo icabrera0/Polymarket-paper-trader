@@ -274,19 +274,19 @@ class NewsArticle(BaseModel):
 class TradeRecommendation(str, Enum):
     """Recommendation issued by the SENTIMENT_ANALYZER to the DECISION_ENGINE."""
 
-    COMPRAR_YES = "COMPRAR_YES"
-    COMPRAR_NO = "COMPRAR_NO"
-    ESPERAR = "ESPERAR"
+    BUY_YES = "BUY_YES"
+    BUY_NO = "BUY_NO"
+    WAIT = "WAIT"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"  # No news available or news is irrelevant
 
 
 class Timeframe(str, Enum):
     """Estimated time horizon of the news impact."""
 
-    INMEDIATO = "INMEDIATO"   # < 1h
-    HORAS = "HORAS"           # 1h - 24h
-    DIAS = "DIAS"             # 24h - 7d
-    DESCONOCIDO = "DESCONOCIDO"
+    IMMEDIATE = "IMMEDIATE"   # < 1h
+    HOURS = "HOURS"           # 1h - 24h
+    DAYS = "DAYS"             # 24h - 7d
+    UNKNOWN = "UNKNOWN"
 
 
 class MarketAnalysis(BaseModel):
@@ -331,7 +331,7 @@ class MarketAnalysis(BaseModel):
     )
 
     recommendation: TradeRecommendation
-    timeframe: Timeframe = Timeframe.DESCONOCIDO
+    timeframe: Timeframe = Timeframe.UNKNOWN
     contradictory_sources: bool = False
 
     # Traceability

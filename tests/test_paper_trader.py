@@ -363,8 +363,8 @@ class TestIntegrationWithDecisionEngine:
             confidence=85,
             sentiment_score=0.6,
             impact_score=80.0,
-            recommendation=TradeRecommendation.COMPRAR_YES,
-            timeframe=Timeframe.HORAS,
+            recommendation=TradeRecommendation.BUY_YES,
+            timeframe=Timeframe.HOURS,
         )
         from src.models import NewsArticle, NewsSource, _new_article_id
         from datetime import datetime, timezone

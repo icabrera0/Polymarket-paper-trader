@@ -80,9 +80,9 @@ class TestEmbedConstruction:
         assert len(embeds_sent) == 1
         embed = embeds_sent[0]
         field_values = {f["name"]: f["value"] for f in embed["fields"]}
-        assert "Precio entrada" in field_values
-        assert "Tamaño" in field_values
-        assert "€20.00" in field_values["Tamaño"]
+        assert "Entry Price" in field_values
+        assert "Size" in field_values
+        assert "€20.00" in field_values["Size"]
 
     def test_trade_close_ganador_usa_color_profit(self, notifier):
         pos = make_position(pnl_eur=5.0, pnl_pct=0.25)

@@ -14,7 +14,7 @@ Also periodically evaluates open positions and decides whether to close them:
 Design:
 - Stateless where possible. State is held by the RiskManager (drawdown, pause).
 - Chains 4 validation layers before saying OPEN_TRADE:
-   1. LLM recommendation must be COMPRAR_YES or COMPRAR_NO.
+   1. LLM recommendation must be BUY_YES or BUY_NO.
    2. Do not open if there is already a position on the same market and same side.
    3. Cancel if there is already a position on the OPPOSITE side (would be contradictory).
    4. Final RiskManager.validate_new_trade().
@@ -101,7 +101,7 @@ class DecisionEngine:
             rationale_parts.append("The LLM does not have enough data")
             return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        if analysis.recommendation == TradeRecommendation.ESPERAR:
+        if analysis.recommendation == TradeRecommendation.WAIT:
             skip_reasons.append(SkipReason.LLM_RECOMMENDS_WAIT)
             rationale_parts.append("The LLM recommends waiting")
             return self._no_trade(analysis, skip_reasons, rationale_parts)
@@ -260,8 +260,8 @@ class DecisionEngine:
 
         is_long_yes = position.side == TradeSide.BUY_YES
         contradicts = (
-            (is_long_yes and new_analysis.recommendation == TradeRecommendation.COMPRAR_NO)
-            or (not is_long_yes and new_analysis.recommendation == TradeRecommendation.COMPRAR_YES)
+            (is_long_yes and new_analysis.recommendation == TradeRecommendation.BUY_NO)
+            or (not is_long_yes and new_analysis.recommendation == TradeRecommendation.BUY_YES)
         )
         if contradicts:
             from src.models import CloseReason
@@ -295,13 +295,13 @@ class DecisionEngine:
         self, analysis: MarketAnalysis
     ) -> tuple[TradeSide, str, float]:
         """Returns (side, token_id, entry_price) based on the recommendation."""
-        if analysis.recommendation == TradeRecommendation.COMPRAR_YES:
+        if analysis.recommendation == TradeRecommendation.BUY_YES:
             return (
                 TradeSide.BUY_YES,
                 analysis.yes_token_id,
                 analysis.current_yes_price,
             )
-        if analysis.recommendation == TradeRecommendation.COMPRAR_NO:
+        if analysis.recommendation == TradeRecommendation.BUY_NO:
             return (
                 TradeSide.BUY_NO,
                 analysis.no_token_id,

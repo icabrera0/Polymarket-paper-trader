@@ -129,8 +129,8 @@ def seed_db(db: Database, day: datetime) -> None:
         current_yes_price=0.40, current_no_price=0.59,
         consensus_probability_yes=0.55, edge=0.15,
         confidence=80, sentiment_score=0.6, impact_score=70.0,
-        recommendation=TradeRecommendation.COMPRAR_YES,
-        timeframe=Timeframe.HORAS,
+        recommendation=TradeRecommendation.BUY_YES,
+        timeframe=Timeframe.HOURS,
         summary="Strong news favoring Spain",
         num_articles_analyzed=5,
         llm_model="qwen2.5:7b", llm_input_tokens=2500, llm_output_tokens=350,
@@ -145,8 +145,8 @@ def seed_db(db: Database, day: datetime) -> None:
         current_yes_price=0.30, current_no_price=0.69,
         consensus_probability_yes=0.20, edge=-0.10,
         confidence=70, sentiment_score=-0.4, impact_score=60.0,
-        recommendation=TradeRecommendation.COMPRAR_NO,
-        timeframe=Timeframe.DIAS,
+        recommendation=TradeRecommendation.BUY_NO,
+        timeframe=Timeframe.DAYS,
         summary="Bearish crypto sentiment",
         num_articles_analyzed=3,
         llm_model="qwen2.5:7b", llm_input_tokens=2200, llm_output_tokens=300,
@@ -206,11 +206,11 @@ class TestReportGenerator:
         wb = load_workbook(out_path)
 
         expected = {
-            "Resumen Ejecutivo",
-            "Trades Detallados",
-            "Análisis LLM",
-            "Decisiones",
-            "Evolución Balance",
+            "Executive Summary",
+            "Detailed Trades",
+            "LLM Analyses",
+            "Decisions",
+            "Balance Evolution",
         }
         assert expected == set(wb.sheetnames)
 
@@ -221,17 +221,17 @@ class TestReportGenerator:
 
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
-        ws = wb["Resumen Ejecutivo"]
+        ws = wb["Executive Summary"]
 
         # The title of cell A1 must contain the date
-        assert "Reporte Paper Trading" in str(ws["A1"].value)
+        assert "Paper Trading Report" in str(ws["A1"].value)
         # Search for the text of some KPI
         labels = []
         for row in ws.iter_rows(min_row=1, max_col=1, values_only=True):
             if row[0]:
                 labels.append(str(row[0]))
-        assert any("P&L día" in l for l in labels)
-        assert any("Win rate" in l for l in labels)
+        assert any("Daily P&L" in l for l in labels)
+        assert any("Win Rate" in l for l in labels)
         assert any("Drawdown" in l for l in labels)
 
     def test_trades_detallados_tiene_filas(self, configured, db_path):
@@ -241,7 +241,7 @@ class TestReportGenerator:
 
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
-        ws = wb["Trades Detallados"]
+        ws = wb["Detailed Trades"]
 
         # 1 header + 3 trades
         assert ws.max_row >= 4
@@ -253,7 +253,7 @@ class TestReportGenerator:
 
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
-        ws = wb["Análisis LLM"]
+        ws = wb["LLM Analyses"]
         assert ws.max_row >= 3  # 1 header + 2 analyses
 
     def test_decisiones_incluye_no_trade(self, configured, db_path):
@@ -263,7 +263,7 @@ class TestReportGenerator:
 
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
-        ws = wb["Decisiones"]
+        ws = wb["Decisions"]
         # We look for both OPEN_TRADE and NO_TRADE to appear
         actions = []
         for row in ws.iter_rows(min_row=2, values_only=True):
@@ -279,7 +279,7 @@ class TestReportGenerator:
 
         out_path = ReportGenerator(configured, db).generate_daily_report(day)
         wb = load_workbook(out_path)
-        ws = wb["Evolución Balance"]
+        ws = wb["Balance Evolution"]
         # ws._charts is the internal openpyxl list
         assert len(ws._charts) >= 1
 
@@ -289,7 +289,7 @@ class TestReportGenerator:
         out_path = ReportGenerator(configured, db).generate_daily_report()
         assert out_path.exists()
         wb = load_workbook(out_path)
-        assert "Resumen Ejecutivo" in wb.sheetnames
+        assert "Executive Summary" in wb.sheetnames
 
     def test_filtra_por_dia_correcto(self, configured, db_path):
         """Yesterday's trades must NOT appear in today's report."""
@@ -303,6 +303,6 @@ class TestReportGenerator:
         # Generate TODAY's report (should be empty of trades)
         out_path = ReportGenerator(configured, db).generate_daily_report(today)
         wb = load_workbook(out_path)
-        ws = wb["Trades Detallados"]
+        ws = wb["Detailed Trades"]
         # Only header, no data rows
         assert ws.max_row == 1

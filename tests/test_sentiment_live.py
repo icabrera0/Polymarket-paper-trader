@@ -46,9 +46,9 @@ NUM_MARKETS_TO_ANALYZE = 3
 def color_for_recommendation(rec: TradeRecommendation) -> str:
     """Returns an indicative emoji for the terminal."""
     return {
-        TradeRecommendation.COMPRAR_YES: "🟢 BUY YES",
-        TradeRecommendation.COMPRAR_NO: "🔴 BUY NO",
-        TradeRecommendation.ESPERAR: "🟡 HOLD",
+        TradeRecommendation.BUY_YES: "🟢 BUY YES",
+        TradeRecommendation.BUY_NO: "🔴 BUY NO",
+        TradeRecommendation.WAIT: "🟡 HOLD",
         TradeRecommendation.INSUFFICIENT_DATA: "⚪ NO DATA",
     }.get(rec, str(rec))
 

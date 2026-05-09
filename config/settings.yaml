@@ -265,7 +265,7 @@ decision:
   # =====================================================
   # After selecting main candidates by volume/category, also add markets
   # where YES is priced high (>= no_hunt_min_yes_price). These are prime
-  # COMPRAR_NO candidates: a market priced YES=0.80 only needs to drop to
+  # BUY_NO candidates: a market priced YES=0.80 only needs to drop to
   # YES=0.70 for NO buyers to earn +50% on their position.
   no_hunt_enabled: true
   no_hunt_min_yes_price: 0.65          # Markets with YES >= 65% → potential NO edge

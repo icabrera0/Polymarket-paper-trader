@@ -54,8 +54,8 @@ class FakeLLMClient(LLMClient):
             "confidence": 70,
             "sentiment_score": 0.3,
             "impact_score": 60.0,
-            "recommendation": "COMPRAR_YES",
-            "timeframe": "HORAS",
+            "recommendation": "BUY_YES",
+            "timeframe": "HOURS",
             "contradictory_sources": False,
             "summary": "Fake summary",
             "justification": "Fake justification",
@@ -266,8 +266,8 @@ class TestLLMCall:
             "confidence": 75,
             "sentiment_score": 0.5,
             "impact_score": 70,
-            "recommendation": "COMPRAR_YES",
-            "timeframe": "INMEDIATO",
+            "recommendation": "BUY_YES",
+            "timeframe": "IMMEDIATE",
             "contradictory_sources": False,
             "summary": "Good news for YES",
             "justification": "Multiple Reuters sources confirm.",
@@ -279,8 +279,8 @@ class TestLLMCall:
         assert result.consensus_probability_yes == pytest.approx(0.65)
         assert result.edge == pytest.approx(0.25)  # 0.65 - 0.40
         assert result.confidence == 75
-        assert result.recommendation == TradeRecommendation.COMPRAR_YES
-        assert result.timeframe == Timeframe.INMEDIATO
+        assert result.recommendation == TradeRecommendation.BUY_YES
+        assert result.timeframe == Timeframe.IMMEDIATE
         assert result.summary == "Good news for YES"
         assert result.num_articles_analyzed == 2
 
@@ -290,8 +290,8 @@ class TestLLMCall:
             "confidence": 70,
             "sentiment_score": 0.3,
             "impact_score": 60,
-            "recommendation": "COMPRAR_YES",
-            "timeframe": "HORAS",
+            "recommendation": "BUY_YES",
+            "timeframe": "HOURS",
             "contradictory_sources": False,
             "summary": "...",
             "justification": "...",
@@ -310,7 +310,7 @@ class TestLLMCall:
             "sentiment_score": 0.0,
             "impact_score": 50,
             "recommendation": "INVENTED",  # does not exist
-            "timeframe": "HORAS",
+            "timeframe": "HOURS",
             "contradictory_sources": False,
             "summary": "...",
             "justification": "...",
@@ -319,7 +319,7 @@ class TestLLMCall:
         result = analyzer.analyze(
             make_market(), [make_article(), make_article(title="b")]
         )
-        assert result.recommendation == TradeRecommendation.ESPERAR
+        assert result.recommendation == TradeRecommendation.WAIT
 
 
 # =====================================================
@@ -334,8 +334,8 @@ class TestValidation:
             "confidence": 70,
             "sentiment_score": 0.3,
             "impact_score": 60.0,
-            "recommendation": "COMPRAR_YES",
-            "timeframe": "HORAS",
+            "recommendation": "BUY_YES",
+            "timeframe": "HOURS",
             "contradictory_sources": False,
             "summary": "...",
             "justification": "...",
@@ -352,7 +352,7 @@ class TestValidation:
             [make_article(), make_article(title="b")],
         )
         # consensus 0.55, price 0.30, edge 0.25 (sufficient) but conf 40 is low
-        assert result.recommendation == TradeRecommendation.ESPERAR
+        assert result.recommendation == TradeRecommendation.WAIT
 
     def test_downgrade_si_edge_pequeno(self, config):
         # consensus 0.42, price 0.40 → edge 0.02 (< 0.05 minimum)
@@ -364,47 +364,47 @@ class TestValidation:
             make_market(yes_price=0.40),
             [make_article(), make_article(title="b")],
         )
-        assert result.recommendation == TradeRecommendation.ESPERAR
+        assert result.recommendation == TradeRecommendation.WAIT
 
     def test_downgrade_si_recomendacion_contradice_edge(self, config):
-        # LLM says COMPRAR_YES but consensus < price (negative edge)
+        # LLM says BUY_YES but consensus < price (negative edge)
         client = FakeAnthropicClient(self._llm_with(
             consensus_probability_yes=0.20,  # edge = 0.20 - 0.40 = -0.20
             confidence=80,
-            recommendation="COMPRAR_YES",
+            recommendation="BUY_YES",
         ))
         analyzer = SentimentAnalyzer(config, client=client)
         result = analyzer.analyze(
             make_market(yes_price=0.40),
             [make_article(), make_article(title="b")],
         )
-        assert result.recommendation == TradeRecommendation.ESPERAR
+        assert result.recommendation == TradeRecommendation.WAIT
 
     def test_compra_yes_se_mantiene_si_todo_ok(self, config):
         client = FakeAnthropicClient(self._llm_with(
             consensus_probability_yes=0.60,  # edge = 0.20 (positive)
             confidence=85,
-            recommendation="COMPRAR_YES",
+            recommendation="BUY_YES",
         ))
         analyzer = SentimentAnalyzer(config, client=client)
         result = analyzer.analyze(
             make_market(yes_price=0.40),
             [make_article(), make_article(title="b")],
         )
-        assert result.recommendation == TradeRecommendation.COMPRAR_YES
+        assert result.recommendation == TradeRecommendation.BUY_YES
 
     def test_compra_no_se_mantiene_si_todo_ok(self, config):
         client = FakeAnthropicClient(self._llm_with(
             consensus_probability_yes=0.20,  # edge = -0.40 (NO undervalued)
             confidence=85,
-            recommendation="COMPRAR_NO",
+            recommendation="BUY_NO",
         ))
         analyzer = SentimentAnalyzer(config, client=client)
         result = analyzer.analyze(
             make_market(yes_price=0.60),
             [make_article(), make_article(title="b")],
         )
-        assert result.recommendation == TradeRecommendation.COMPRAR_NO
+        assert result.recommendation == TradeRecommendation.BUY_NO
 
 
 # =====================================================
