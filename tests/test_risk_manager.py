@@ -335,6 +335,69 @@ class TestManualControl:
 # =====================================================
 
 
+# =====================================================
+# VaR (Value at Risk) checks
+# =====================================================
+
+
+def test_var_rejects_oversized_position(config_factory):
+    """VaR check should reject a trade where daily VaR > var_daily_limit_pct * balance."""
+    cfg = config_factory(risk_overrides={
+        "max_position_size_pct": 0.99,          # allow large sizes so only VaR blocks it
+        "max_simultaneous_positions": 15,
+        "min_trade_size_eur": 5.0,
+        "max_drawdown_pct": 0.30,
+        "stop_loss_pct": 0.20,
+        "take_profit_pct": 0.30,
+        "drawdown_pause_requires_manual_resume": True,
+        "kelly_fraction": 0.25,
+        "var_daily_limit_pct": 0.05,   # 5% of 150 = 7.50€ VaR limit
+        "var_sigma_assumption": 0.30,
+        "max_slippage_pct": 0.02,
+    })
+    rm = RiskManager(cfg, initial_balance_eur=150.0)
+
+    # daily_var = 1.645 * 0.30 * 100.0 = 49.35€ >> 7.50€ limit → reject
+    result = rm.validate_new_trade(
+        proposed_size_eur=100.0,
+        current_balance_eur=150.0,
+        open_positions_count=0,
+        entry_price=0.50,
+    )
+
+    assert not result.approved
+    assert RejectReason.VAR_LIMIT_EXCEEDED in result.rejection_reasons
+
+
+def test_var_approves_normal_position(config_factory):
+    """VaR check should pass for a position well within the daily VaR limit."""
+    cfg = config_factory(risk_overrides={
+        "max_position_size_pct": 0.99,          # allow large sizes so only VaR gates
+        "max_simultaneous_positions": 15,
+        "min_trade_size_eur": 5.0,
+        "max_drawdown_pct": 0.30,
+        "stop_loss_pct": 0.20,
+        "take_profit_pct": 0.30,
+        "drawdown_pause_requires_manual_resume": True,
+        "kelly_fraction": 0.25,
+        "var_daily_limit_pct": 0.05,   # 7.50€ limit
+        "var_sigma_assumption": 0.30,
+        "max_slippage_pct": 0.02,
+    })
+    rm = RiskManager(cfg, initial_balance_eur=150.0)
+
+    # daily_var = 1.645 * 0.30 * 5.0 = 2.47€ < 7.50€ → approve
+    result = rm.validate_new_trade(
+        proposed_size_eur=5.0,
+        current_balance_eur=150.0,
+        open_positions_count=0,
+        entry_price=0.50,
+    )
+
+    assert result.approved
+    assert RejectReason.VAR_LIMIT_EXCEEDED not in result.rejection_reasons
+
+
 class TestIntegrationFlow:
     def test_flujo_completo_trade_ganador(self, risk_manager):
         """Simulates: validate → open → close with TP → balance updated."""

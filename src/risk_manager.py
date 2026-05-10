@@ -159,6 +159,20 @@ class RiskManager:
             if adjusted_size < self.risk.min_trade_size_eur:
                 rejections.append(RejectReason.SIZE_ABOVE_MAX)
 
+        # 7) VaR check — 95% confidence, 1-day parametric VaR
+        #    daily_var = 1.645 * sigma * effective_size
+        #    Reject if daily_var > balance * var_daily_limit_pct
+        sigma = self.risk.var_sigma_assumption
+        check_size = adjusted_size if adjusted_size is not None else proposed_size_eur
+        daily_var = 1.645 * sigma * check_size
+        var_limit = current_balance_eur * self.risk.var_daily_limit_pct
+        if daily_var > var_limit:
+            rejections.append(RejectReason.VAR_LIMIT_EXCEEDED)
+            warnings.append(
+                f"VaR check: daily VaR ({daily_var:.2f}€) exceeds limit "
+                f"({var_limit:.2f}€ = {self.risk.var_daily_limit_pct:.0%} of balance)"
+            )
+
         approved = len(rejections) == 0
         result = RiskCheckResult(
             approved=approved,

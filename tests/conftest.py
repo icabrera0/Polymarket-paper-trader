@@ -62,6 +62,9 @@ def build_test_config(
         "stop_loss_pct": 0.20,
         "take_profit_pct": 0.30,
         "drawdown_pause_requires_manual_resume": True,
+        # Permissive VaR limit in tests so existing sizing tests aren't blocked.
+        # VaR-specific tests override this via risk_overrides in config_factory.
+        "var_daily_limit_pct": 0.20,
     }
     if risk_overrides:
         risk_defaults.update(risk_overrides)
