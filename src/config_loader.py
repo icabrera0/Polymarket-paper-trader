@@ -66,6 +66,10 @@ class MarketFiltersConfig(BaseModel):
     min_time_to_close_hours: float = Field(ge=0)
     max_time_to_close_days: float = Field(gt=0)
     exclude_categories: list[str] = []
+    # Pre-analysis filters: applied BEFORE the LLM is called
+    min_volume_usd: float = Field(default=5000.0, ge=0)
+    min_hours_to_close: float = Field(default=12.0, ge=0)
+    max_spread_cost: float = Field(default=0.06, ge=0, le=1)
 
 
 class NewsApiConfig(BaseModel):
@@ -151,6 +155,37 @@ class DecisionConfig(BaseModel):
     no_hunt_max_candidates: int = Field(default=3, gt=0)
 
 
+class SocialTelegramConfig(BaseModel):
+    enabled: bool = False
+    channels: list[str] = Field(default_factory=list)
+    max_posts_per_channel: int = Field(default=20, gt=0)
+    max_age_hours: int = Field(default=24, gt=0)
+
+
+class SocialRedditConfig(BaseModel):
+    enabled: bool = False
+    subreddits: list[str] = Field(default_factory=list)
+    max_posts_per_subreddit: int = Field(default=15, gt=0)
+    max_age_hours: int = Field(default=12, gt=0)
+    client_id: str = ""
+    client_secret: str = ""
+    user_agent: str = "polymarket-bot/1.0"
+
+
+class SocialRssConfig(BaseModel):
+    enabled: bool = False
+    feeds: list[str] = Field(default_factory=list)
+    max_items_per_feed: int = Field(default=10, gt=0)
+    max_age_hours: int = Field(default=6, gt=0)
+
+
+class SocialConfig(BaseModel):
+    enabled: bool = False
+    telegram: SocialTelegramConfig = Field(default_factory=SocialTelegramConfig)
+    reddit: SocialRedditConfig = Field(default_factory=SocialRedditConfig)
+    rss: SocialRssConfig = Field(default_factory=SocialRssConfig)
+
+
 class SportsInPlayConfig(BaseModel):
     """Optional opt-in module for underdog betting on live matches."""
 
@@ -226,6 +261,7 @@ class BotConfig(BaseModel):
     llm: LlmConfig
     polymarket: PolymarketConfig
     decision: DecisionConfig
+    social: SocialConfig = Field(default_factory=SocialConfig)
     sports_in_play: SportsInPlayConfig = Field(default_factory=SportsInPlayConfig)
     reports: ReportsConfig
     logging: LoggingConfig

@@ -240,7 +240,8 @@ class TestClosePosition:
         assert closed.status == TradeStatus.CLOSED
         assert closed.pnl_eur > 0
         assert closed.close_reason == CloseReason.TAKE_PROFIT
-        assert trader.balance_eur > balance_after_open + 20.0  # returns principal + gain
+        # Balance is capped at initial_balance_eur by the profit sweep
+        assert trader.balance_eur == pytest.approx(150.0)
         assert trader.num_open_positions == 0
 
     def test_cierre_con_perdida(self, trader):

@@ -62,7 +62,10 @@ MAX_FRESH_AGE_HOURS = 48.0
 
 # Minimum edge for a trade to be worth recommending. Below this we
 # recommend WAIT even if the LLM says otherwise.
-MIN_EDGE_FOR_TRADE = 0.05
+# Raised from 0.05 → 0.10: Polymarket calibration research (Brier ~0.17)
+# shows 5% edges are within noise. A 10% edge is the minimum for a real
+# inefficiency.
+MIN_EDGE_FOR_TRADE = 0.10
 
 
 # =====================================================
@@ -197,6 +200,157 @@ Return only this JSON object. No text before or after. No markdown. No code fenc
   "contradictory_sources": false,
   "summary": "2-3 sentences: what the fresh articles say about this specific match",
   "justification": "(a) the specific fresh signal and its source name, (b) edge calculation: YES_price minus consensus_probability_yes, (c) which rules passed and which caused a stop"
+}"""
+
+
+# =====================================================
+# Panel system prompts (3-agent panel + synthesis)
+# =====================================================
+
+PANEL_QUANT_PROMPT = """You are a pure quantitative analyst on a 3-agent trading panel for Polymarket. Your role is MATHEMATICS ONLY — do not factor in narrative, domain knowledge, or soft signals. Other agents handle that.
+
+YOUR FOCUS:
+- Edge calculation quality: is the gap between the model price and market price large enough to be real?
+- Kelly fraction quality: given the confidence assigned, what fraction of bankroll does this deserve?
+- Market calibration prior: Polymarket achieves a Brier score of ~0.17, which means the market price is already a strong predictor. Assume the price is CORRECT unless the mathematical evidence is overwhelming. A 5% edge is noise. A 10–15% edge with 3+ sources is the minimum for a real inefficiency.
+- Sample quality: how many independent data points support the estimate? Single-source estimates have massive confidence intervals.
+
+CONFIDENCE CEILING: Hard maximum 70. You have no soft knowledge — the math alone cannot justify higher. Never exceed 70.
+
+RULES:
+1. Start your probability estimate at the current market price (that is the prior).
+2. Update it only based on the mathematical strength of the evidence (number of sources, recency, directness of claim).
+3. If the adjusted probability differs from the market price by less than 10pp, recommend WAIT.
+4. If only 1 source supports the claim, cap confidence at 55.
+5. If articles are all >24h old, cap confidence at 45 and recommend WAIT.
+
+Output the same JSON schema as the main system prompt. Return ONLY the JSON object.
+
+{
+  "consensus_probability_yes": 0.0,
+  "confidence": 0,
+  "sentiment_score": 0.0,
+  "impact_score": 0.0,
+  "recommendation": "WAIT",
+  "timeframe": "UNKNOWN",
+  "contradictory_sources": false,
+  "summary": "Mathematical edge quality assessment in 2-3 sentences.",
+  "justification": "Edge calculation: [your probability] vs market [market price] = [edge]. Source count and recency score. Which rules triggered."
+}"""
+
+
+PANEL_DOMAIN_PROMPT = """You are a domain knowledge expert on a 3-agent trading panel for Polymarket. Your role is CONTEXT AND KNOWLEDGE — do not do the mathematics. Other agents handle that. Your job is to assess whether the news articles represent a real signal or noise given what you know about this domain.
+
+ROUTE BY CATEGORY — apply the correct reasoning framework based on what the market is about:
+
+POLITICS/ELECTIONS: Apply political science reasoning. Consider: polling reliability, incumbent advantage, electoral college math, historical base rates for this type of event, how often "leading" candidates fail to deliver.
+
+ECONOMICS/FINANCE: Apply macro reasoning. Consider: market pricing efficiency (markets often price in news before it's widely reported), Fed/central bank behavior patterns, earnings seasonality, sector rotation signals.
+
+LEGAL/REGULATORY: Apply precedent reasoning. Consider: how often does this type of regulatory decision go each way historically? What is the base rate for judicial reversals? How long do these processes normally take?
+
+SPORTS/COMPETITION: Apply statistical reasoning. Consider: historical head-to-head records, current form, home advantage, injury impact on probability (not just narrative).
+
+TECHNOLOGY/SCIENCE: Apply realistic timeline reasoning. Consider: how often do tech announcements lead to on-time delivery? What is the base rate for this type of announcement being accurate?
+
+GENERAL: Apply base rate reasoning. What is the prior probability of this type of event occurring? How much should this specific news update that prior?
+
+YOUR OUTPUT RULES:
+- Do NOT calculate the mathematical edge — that is the Quant's job.
+- DO assess whether the domain context makes the news articles more or less informative.
+- DO flag domain-specific reasons the market price might be wrong.
+- DO flag domain-specific reasons the market price is probably right.
+- Confidence ceiling: 80 (you have context but not math).
+
+Output the same JSON schema. Return ONLY the JSON object.
+
+{
+  "consensus_probability_yes": 0.0,
+  "confidence": 0,
+  "sentiment_score": 0.0,
+  "impact_score": 0.0,
+  "recommendation": "WAIT",
+  "timeframe": "UNKNOWN",
+  "contradictory_sources": false,
+  "summary": "Domain assessment in 2-3 sentences. What domain framework applied and what it reveals.",
+  "justification": "Domain framework used. Domain-specific reasons for or against the trade. Base rate for this type of event. Recommendation follows from domain reasoning."
+}"""
+
+
+PANEL_ADVERSARIAL_PROMPT = """You are the adversarial risk agent on a 3-agent trading panel for Polymarket. Your job is to KILL TRADES. You are the devil's advocate. Your mission is to find every reason the market price is already correct and the other agents are wrong.
+
+YOUR MANDATE — before recommending any trade, you MUST find all of the following:
+
+1. DATA STALENESS CHECK: Are the articles the basis for a trade published more than 6 hours ago? If yes, the market has already priced in this information. Flag this aggressively.
+
+2. SINGLE-SOURCE RISK: Is the key claim supported by only one outlet? If yes, the risk of factual error, misreporting, or selective coverage is high. This alone should produce WAIT.
+
+3. NARRATIVE BIAS CHECK: Are the articles all from sources with a known slant? Political articles from advocacy outlets, financial articles from sources with a position — all are suspect. Flag if you detect this.
+
+4. MARKET EFFICIENCY CHECK: Polymarket has many professional traders who read the same news. If this news is visible to you, it is visible to them. Ask: "Why hasn't the market already moved to price this in?" If you cannot find a good answer, the market price is probably correct.
+
+5. RESOLUTION AMBIGUITY: Could the market resolve differently than the news suggests even if the news is accurate? (e.g., the news says "X is likely" but the market asks "will X happen by DATE Y?"). Flag any timing mismatch.
+
+6. REVERSAL RISK: Is there a credible path to the opposite outcome within the market's timeframe? If yes, downgrade confidence significantly.
+
+DEFAULT BEHAVIOR: Recommend WAIT unless you CANNOT find a reasonable argument against the trade. The burden of proof is on the bull case.
+
+BUY SIGNAL PENALTY: If you would naturally assign a confidence of X to a BUY signal, output X - 15 instead. You are structurally skeptical of upside. Never exceed confidence of 65 on any BUY signal.
+
+If you find no red flags at all after applying all 6 checks, you may recommend the trade — but only with the reduced confidence.
+
+Output the same JSON schema. Return ONLY the JSON object.
+
+{
+  "consensus_probability_yes": 0.0,
+  "confidence": 0,
+  "sentiment_score": 0.0,
+  "impact_score": 0.0,
+  "recommendation": "WAIT",
+  "timeframe": "UNKNOWN",
+  "contradictory_sources": false,
+  "summary": "Adversarial assessment: what red flags were found (or not found).",
+  "justification": "List each of the 6 checks and its result. State which checks caused WAIT or allowed the trade through."
+}"""
+
+
+PANEL_SYNTHESIS_PROMPT = """You are the synthesis agent for a 3-agent trading panel. You receive the outputs of three specialist agents (Quant, Domain Expert, Adversarial Risk) and must produce a single final trading recommendation by applying the following rules exactly.
+
+SYNTHESIS RULES — apply in order:
+
+RULE 1 — WAIT MAJORITY: If 2 or more agents recommend WAIT or INSUFFICIENT_DATA, the final recommendation is WAIT. Do not override this rule for any reason.
+
+RULE 2 — ADVERSARIAL VETO: If the Adversarial agent's confidence in a WAIT recommendation is 70 or higher, the final recommendation is WAIT, regardless of what the other two agents say.
+
+RULE 3 — TRADE CONSENSUS: If 2 or more agents agree on BUY_YES or BUY_NO, AND the average confidence of the agreeing agents is 65 or higher, proceed with that direction.
+
+RULE 4 — PROBABILITY SYNTHESIS: Compute the final consensus_probability_yes as a weighted average:
+  - Quant weight: 0.4
+  - Domain Expert weight: 0.4
+  - Adversarial weight: 0.2
+  weighted_avg = (quant_prob * 0.4) + (domain_prob * 0.4) + (adversarial_prob * 0.2)
+
+RULE 5 — CONFIDENCE SYNTHESIS: Final confidence = min(85, average_confidence_of_agreeing_agents - 5). The panel is always slightly more conservative than any individual agent. If no trade (WAIT), final confidence = 0.
+
+RULE 6 — FALLBACK: If none of the above rules produce a trade (no consensus on direction, or insufficient confidence), the final recommendation is WAIT.
+
+You will receive the three agent outputs in this format:
+  Agent 1 (Quant): recommendation=X, confidence=Y, probability=Z, justification=...
+  Agent 2 (Domain): recommendation=X, confidence=Y, probability=Z, justification=...
+  Agent 3 (Adversarial): recommendation=X, confidence=Y, probability=Z, justification=...
+
+Output the final MarketAnalysis JSON. Use the synthesized values for consensus_probability_yes and confidence. For summary and justification, explain which rules triggered and why. Return ONLY the JSON object.
+
+{
+  "consensus_probability_yes": 0.0,
+  "confidence": 0,
+  "sentiment_score": 0.0,
+  "impact_score": 0.0,
+  "recommendation": "WAIT",
+  "timeframe": "UNKNOWN",
+  "contradictory_sources": false,
+  "summary": "Panel vote summary: [Q=REC/CONF, D=REC/CONF, A=REC/CONF]. Final: FINAL_REC.",
+  "justification": "Which synthesis rules triggered. Final edge and confidence calculation. Why the panel converged on this recommendation."
 }"""
 
 
@@ -623,11 +777,202 @@ class SentimentAnalyzer:
     # LLM call
     # =====================================================
 
+    def _call_single_agent(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> tuple[dict, dict, bool]:
+        """Calls the LLM with the given prompts and returns (parsed_json, meta, succeeded).
+
+        The `succeeded` bool is True when the LLM call returned a real response,
+        False when it raised an exception and we are returning a WAIT sentinel.
+        Never raises — callers always get a usable result.
+        """
+        try:
+            parsed, meta = self.client.complete_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            return parsed, meta, True
+        except Exception as exc:
+            self._log.warning("Panel agent failed: {}", exc)
+            # Sentinel: WAIT with confidence=0
+            return (
+                {
+                    "recommendation": "WAIT",
+                    "confidence": 0,
+                    "consensus_probability_yes": 0.5,
+                    "sentiment_score": 0.0,
+                    "impact_score": 0.0,
+                    "timeframe": "UNKNOWN",
+                    "contradictory_sources": False,
+                    "summary": f"Agent failed: {exc}",
+                    "justification": f"Agent failed: {exc}",
+                },
+                {"input_tokens": 0, "output_tokens": 0},
+                False,
+            )
+
+    def _run_panel(
+        self,
+        market: MarketSnapshot,
+        articles: list[NewsArticle],
+        user_prompt: str,
+    ) -> MarketAnalysis:
+        """Runs the 3-agent panel in parallel, then calls the synthesis agent.
+
+        Falls back to single-agent if ALL 3 panel calls fail.
+        Logs a token cost summary line after completion.
+        """
+        agent_specs = [
+            ("Quant",       PANEL_QUANT_PROMPT),
+            ("Domain",      PANEL_DOMAIN_PROMPT),
+            ("Adversarial", PANEL_ADVERSARIAL_PROMPT),
+        ]
+
+        panel_results: list[tuple[str, dict, dict]] = []  # (name, parsed, meta)
+        successful_agents = 0
+
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="panel") as pool:
+            futures = {
+                pool.submit(self._call_single_agent, sys_p, user_prompt): name
+                for name, sys_p in agent_specs
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    parsed, meta, succeeded = future.result()
+                    if succeeded:
+                        successful_agents += 1
+                    panel_results.append((name, parsed, meta))
+                except Exception as exc:
+                    # Should not reach here (_call_single_agent never raises), but safety net
+                    self._log.error("Panel future error for {}: {}", name, exc)
+                    panel_results.append((
+                        name,
+                        {
+                            "recommendation": "WAIT",
+                            "confidence": 0,
+                            "consensus_probability_yes": market.yes_price,
+                            "sentiment_score": 0.0,
+                            "impact_score": 0.0,
+                            "timeframe": "UNKNOWN",
+                            "contradictory_sources": False,
+                            "summary": f"Agent failed: {exc}",
+                            "justification": f"Agent failed: {exc}",
+                        },
+                        {"input_tokens": 0, "output_tokens": 0},
+                    ))
+
+        # Sort results back into canonical order (Quant, Domain, Adversarial)
+        order = {name: i for i, (name, _) in enumerate(agent_specs)}
+        panel_results.sort(key=lambda x: order.get(x[0], 99))
+
+        panel_input_tokens  = sum(m.get("input_tokens", 0)  for _, _, m in panel_results)
+        panel_output_tokens = sum(m.get("output_tokens", 0) for _, _, m in panel_results)
+
+        if successful_agents == 0:
+            # All 3 panel calls failed — fall back to single-agent path
+            self._log.warning(
+                "All 3 panel agents failed for market {} — falling back to single-agent",
+                market.market_id,
+            )
+            return self._call_llm_single(market, articles, user_prompt)
+
+        # Build the synthesis user prompt from the 3 agent outputs
+        synthesis_lines: list[str] = []
+        for name, parsed, _ in panel_results:
+            rec   = parsed.get("recommendation", "WAIT")
+            conf  = parsed.get("confidence", 0)
+            prob  = parsed.get("consensus_probability_yes", market.yes_price)
+            just  = str(parsed.get("justification", "")).replace("\n", " ")[:300]
+            synthesis_lines.append(
+                f"Agent ({name}): recommendation={rec}, confidence={conf}, "
+                f"probability={prob:.4f}, justification={just}"
+            )
+
+        synthesis_user_prompt = (
+            user_prompt
+            + "\n\n# PANEL AGENT OUTPUTS (apply synthesis rules to these)\n\n"
+            + "\n".join(synthesis_lines)
+        )
+
+        synth_parsed, synth_meta, _synth_ok = self._call_single_agent(
+            system_prompt=PANEL_SYNTHESIS_PROMPT,
+            user_prompt=synthesis_user_prompt,
+        )
+
+        total_input  = panel_input_tokens  + synth_meta.get("input_tokens", 0)
+        total_output = panel_output_tokens + synth_meta.get("output_tokens", 0)
+        total_tokens = total_input + total_output
+        # Rough single-call estimate: assume ~1200 input + ~400 output
+        single_call_estimate = 1600
+
+        self._log.info(
+            "Panel analysis: 3 agents + synthesis = {} tokens (vs ~{} single-call estimate)",
+            total_tokens,
+            single_call_estimate,
+        )
+
+        # Parse synthesis result
+        try:
+            recommendation = TradeRecommendation(
+                synth_parsed.get("recommendation", "WAIT")
+            )
+        except ValueError:
+            recommendation = TradeRecommendation.WAIT
+
+        try:
+            timeframe = Timeframe(synth_parsed.get("timeframe", "UNKNOWN"))
+        except ValueError:
+            timeframe = Timeframe.UNKNOWN
+
+        consensus = float(synth_parsed.get("consensus_probability_yes", market.yes_price))
+        consensus = max(0.0, min(1.0, consensus))
+
+        # Build the panel vote prefix for the summary field (for dashboard display)
+        votes: list[str] = []
+        for name, parsed, _ in panel_results:
+            short = name[0].upper()  # Q, D, A
+            rec   = parsed.get("recommendation", "WAIT")
+            conf  = parsed.get("confidence", 0)
+            votes.append(f"{short}={rec}/{conf}")
+        panel_prefix = f"[PANEL: {', '.join(votes)}] "
+
+        raw_summary = str(synth_parsed.get("summary", ""))[:450]
+        summary_with_prefix = (panel_prefix + raw_summary)[:500]
+
+        return MarketAnalysis(
+            market_id=market.market_id,
+            market_question=market.question,
+            market_slug=market.slug,
+            yes_token_id=market.yes_token_id,
+            no_token_id=market.no_token_id,
+            current_yes_price=market.yes_price,
+            current_no_price=market.no_price,
+            consensus_probability_yes=consensus,
+            edge=consensus - market.yes_price,
+            confidence=int(synth_parsed.get("confidence", 0)),
+            sentiment_score=float(synth_parsed.get("sentiment_score", 0.0)),
+            impact_score=float(synth_parsed.get("impact_score", 0.0)),
+            recommendation=recommendation,
+            timeframe=timeframe,
+            contradictory_sources=bool(synth_parsed.get("contradictory_sources", False)),
+            summary=summary_with_prefix,
+            justification=str(synth_parsed.get("justification", ""))[:1000],
+            article_ids_analyzed=[a.article_id for a in articles],
+            num_articles_analyzed=len(articles),
+            llm_model=self.cfg_llm.model,
+            llm_input_tokens=total_input,
+            llm_output_tokens=total_output,
+        )
+
     def _call_llm(
         self,
         market: MarketSnapshot,
         articles: list[NewsArticle],
     ) -> MarketAnalysis:
+        """Routes to the panel path. Falls back to single-agent if panel fails entirely."""
         user_prompt = build_user_prompt(market, articles)
         # Inject relevant KB lessons if the compound engine is available
         if self.compound is not None:
@@ -636,6 +981,16 @@ class SentimentAnalyzer:
             )
             if lessons:
                 user_prompt = user_prompt + "\n\n" + lessons
+
+        return self._run_panel(market, articles, user_prompt)
+
+    def _call_llm_single(
+        self,
+        market: MarketSnapshot,
+        articles: list[NewsArticle],
+        user_prompt: str,
+    ) -> MarketAnalysis:
+        """Original single-agent code path. Used as fallback when all panel agents fail."""
         parsed, meta = self.client.complete_json(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
@@ -709,7 +1064,7 @@ class SentimentAnalyzer:
                     min_conf,
                 )
                 analysis.recommendation = TradeRecommendation.WAIT
-            elif abs(analysis.edge) < MIN_EDGE_FOR_TRADE:
+            elif abs(analysis.edge) < MIN_EDGE_FOR_TRADE - 1e-9:
                 self._log.info(
                     "Downgrade to WAIT: |edge|={:.3f} < min={:.3f}",
                     abs(analysis.edge),

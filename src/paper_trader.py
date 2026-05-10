@@ -232,6 +232,17 @@ class PaperTrader:
         # Return principal + P&L to balance
         self._balance_eur += position.size_eur + pnl_eur
 
+        # Profit sweep: cap trading balance at config value, move excess to consolidated profit
+        cap = self.config.paper_trading.initial_balance_eur
+        swept = 0.0
+        if self._balance_eur > cap:
+            swept = self._balance_eur - cap
+            self._balance_eur = cap
+            self._log.info(
+                "Profit sweep: €{:.2f} moved to consolidated profit, balance reset to €{:.2f}",
+                swept, cap,
+            )
+
         # Mark position as closed
         position.status = TradeStatus.CLOSED
         position.exit_price = effective_exit_price
@@ -244,7 +255,7 @@ class PaperTrader:
         # Remove from dictionary and persist
         del self._open_positions[trade_id]
         self.db.update_trade_close(position)
-        self._log_balance_event("TRADE_CLOSE")
+        self._log_balance_event("TRADE_CLOSE", consolidated_profit_eur=swept)
 
         # Update RiskManager drawdown
         self.risk_manager.update_balance_and_check_drawdown(self._balance_eur)
@@ -302,7 +313,7 @@ class PaperTrader:
         effective = market_price * (1 - self._slippage)
         return max(effective, 0.001)
 
-    def _log_balance_event(self, event: str) -> None:
+    def _log_balance_event(self, event: str, consolidated_profit_eur: float = 0.0) -> None:
         """Records a balance snapshot in the balance_history table."""
         try:
             status = self.risk_manager.update_balance_and_check_drawdown(
@@ -314,6 +325,7 @@ class PaperTrader:
                 drawdown_pct=status.current_drawdown_pct,
                 open_positions=len(self._open_positions),
                 event=event,
+                consolidated_profit_eur=consolidated_profit_eur,
             )
         except Exception as exc:
             self._log.warning("_log_balance_event failed: {}", exc)

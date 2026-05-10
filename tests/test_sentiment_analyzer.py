@@ -193,8 +193,8 @@ class TestInsufficientData:
         cfg.decision.low_info_min_articles = 1
         analyzer = SentimentAnalyzer(cfg, client=FakeLLMClient())
         result = analyzer.analyze(make_market(), [make_article()])
-        # DID call the LLM
-        assert len(analyzer.client.calls) == 1
+        # DID call the LLM — panel makes 4 calls (3 agents + 1 synthesis)
+        assert len(analyzer.client.calls) == 4
         # Marked as low_info
         assert result.is_low_info is True
 
@@ -222,8 +222,8 @@ class TestFiltering:
             for i in range(5)
         ]
         analyzer.analyze(market, articles)
-        # Must have called the LLM with only the 3 recent ones
-        assert len(analyzer.client.calls) == 1
+        # Panel makes 4 calls (3 agents + synthesis); all share the same filtered user_prompt
+        assert len(analyzer.client.calls) == 4
         prompt = analyzer.client.calls[0]["user_prompt"]
         assert "Recent" in prompt
         # The old ones should not appear
@@ -281,7 +281,8 @@ class TestLLMCall:
         assert result.confidence == 75
         assert result.recommendation == TradeRecommendation.BUY_YES
         assert result.timeframe == Timeframe.IMMEDIATE
-        assert result.summary == "Good news for YES"
+        # Panel path prepends a [PANEL: ...] prefix — check the text is present anywhere
+        assert "Good news for YES" in result.summary
         assert result.num_articles_analyzed == 2
 
     def test_consensus_fuera_de_rango_se_clipa(self, config):
@@ -413,33 +414,41 @@ class TestValidation:
 
 
 class TestCache:
+    # The panel makes 4 LLM calls per analyze(): 3 panel agents + 1 synthesis.
+    # Cache hits skip ALL calls, so the count should not grow after the first call.
+    _CALLS_PER_ANALYZE = 4  # 3 panel agents + 1 synthesis
+
     def test_cache_evita_segunda_llamada(self, analyzer):
         market = make_market()
         articles = [make_article(), make_article(title="b")]
         analyzer.analyze(market, articles)
         analyzer.analyze(market, articles)
         analyzer.analyze(market, articles)
-        assert len(analyzer.client.calls) == 1
+        # Only the first analyze() should have made LLM calls (4); the rest are cache hits
+        assert len(analyzer.client.calls) == self._CALLS_PER_ANALYZE
 
     def test_force_refresh_rompe_cache(self, analyzer):
         market = make_market()
         articles = [make_article(), make_article(title="b")]
         analyzer.analyze(market, articles)
         analyzer.analyze(market, articles, force_refresh=True)
-        assert len(analyzer.client.calls) == 2
+        # Two full panel runs = 2 × 4 = 8 calls
+        assert len(analyzer.client.calls) == self._CALLS_PER_ANALYZE * 2
 
     def test_cambio_de_precio_invalida_cache(self, analyzer):
         articles = [make_article(), make_article(title="b")]
         analyzer.analyze(make_market(yes_price=0.40), articles)
         # Same market but price moved > 3-decimal rounding
         analyzer.analyze(make_market(yes_price=0.50), articles)
-        assert len(analyzer.client.calls) == 2
+        # Two different cache keys → two panel runs = 8 calls total
+        assert len(analyzer.client.calls) == self._CALLS_PER_ANALYZE * 2
 
     def test_cambio_de_articulos_invalida_cache(self, analyzer):
         market = make_market()
         analyzer.analyze(market, [make_article(title="a"), make_article(title="b")])
         analyzer.analyze(market, [make_article(title="a"), make_article(title="c")])
-        assert len(analyzer.client.calls) == 2
+        # Two different article sets → two panel runs = 8 calls total
+        assert len(analyzer.client.calls) == self._CALLS_PER_ANALYZE * 2
 
 
 # =====================================================

@@ -75,13 +75,14 @@ CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_entry  ON trades(entry_timestamp);
 
 CREATE TABLE IF NOT EXISTS balance_history (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp       TEXT NOT NULL,
-    balance_eur     REAL NOT NULL,
-    peak_balance    REAL NOT NULL,
-    drawdown_pct    REAL NOT NULL,
-    open_positions  INTEGER NOT NULL,
-    event           TEXT
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp               TEXT NOT NULL,
+    balance_eur             REAL NOT NULL,
+    peak_balance            REAL NOT NULL,
+    drawdown_pct            REAL NOT NULL,
+    open_positions          INTEGER NOT NULL,
+    event                   TEXT,
+    consolidated_profit_eur REAL NOT NULL DEFAULT 0.0
 );
 
 CREATE INDEX IF NOT EXISTS idx_balance_timestamp ON balance_history(timestamp);
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS knowledge_base (
     failure_category TEXT NOT NULL,
     confidence       REAL NOT NULL DEFAULT 0.4,
     times_confirmed  INTEGER NOT NULL DEFAULT 0,
+    category         TEXT NOT NULL DEFAULT 'general',
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -225,6 +227,20 @@ class Database:
             if "market_slug" not in cols:
                 self._conn.execute("ALTER TABLE trades ADD COLUMN market_slug TEXT NOT NULL DEFAULT ''")
                 self._log.info("Migrated trades table: added market_slug column")
+            # Migrate existing DBs that don't have consolidated_profit_eur column yet
+            bal_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(balance_history)").fetchall()}
+            if "consolidated_profit_eur" not in bal_cols:
+                self._conn.execute(
+                    "ALTER TABLE balance_history ADD COLUMN consolidated_profit_eur REAL NOT NULL DEFAULT 0.0"
+                )
+                self._log.info("Migrated balance_history: added consolidated_profit_eur column")
+            # Migrate existing DBs that don't have knowledge_base.category column yet
+            kb_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(knowledge_base)").fetchall()}
+            if "category" not in kb_cols:
+                self._conn.execute(
+                    "ALTER TABLE knowledge_base ADD COLUMN category TEXT NOT NULL DEFAULT 'general'"
+                )
+                self._log.info("Migrated knowledge_base: added category column")
         except sqlite3.Error as exc:
             self._log.error("Error initializing schema: {}", exc)
             raise
@@ -390,17 +406,18 @@ class Database:
         drawdown_pct: float,
         open_positions: int,
         event: str = "DAILY_SNAPSHOT",
+        consolidated_profit_eur: float = 0.0,
     ) -> bool:
         try:
             self._conn.execute(
                 """
                 INSERT INTO balance_history
                 (timestamp, balance_eur, peak_balance, drawdown_pct,
-                 open_positions, event)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 open_positions, event, consolidated_profit_eur)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (_now_iso(), balance_eur, peak_balance, drawdown_pct,
-                 open_positions, event),
+                 open_positions, event, consolidated_profit_eur),
             )
             return True
         except sqlite3.Error as exc:
@@ -425,6 +442,18 @@ class Database:
         except sqlite3.Error as exc:
             self._log.error("get_balance_history failed: {}", exc)
             return []
+
+    def get_consolidated_profit(self) -> float:
+        """Returns total EUR swept to consolidated profit across all time."""
+        try:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(consolidated_profit_eur), 0.0) "
+                "FROM balance_history WHERE event = 'profit_sweep'"
+            ).fetchone()
+            return float(row[0]) if row else 0.0
+        except sqlite3.Error as exc:
+            self._log.error("get_consolidated_profit failed: {}", exc)
+            return 0.0
 
     # =====================================================
     # Decisions & analyses logs
@@ -548,8 +577,8 @@ class Database:
                 """
                 INSERT OR REPLACE INTO knowledge_base
                 (id, market_pattern, lesson, failure_category,
-                 confidence, times_confirmed, created_at, updated_at)
-                VALUES (?,?,?,?, ?,?,?,?)
+                 confidence, times_confirmed, category, created_at, updated_at)
+                VALUES (?,?,?,?, ?,?,?,?,?)
                 """,
                 (
                     entry.id,
@@ -558,6 +587,7 @@ class Database:
                     entry.failure_category.value,
                     entry.confidence,
                     entry.times_confirmed,
+                    entry.category,
                     _datetime_to_iso(entry.created_at),
                     _datetime_to_iso(entry.updated_at),
                 ),
@@ -601,6 +631,7 @@ class Database:
                     failure_category=FailureCategory(r["failure_category"]),
                     confidence=r["confidence"],
                     times_confirmed=r["times_confirmed"],
+                    category=r.get("category", "general"),
                     created_at=_iso_to_datetime(r["created_at"]) or datetime.now(timezone.utc),
                     updated_at=_iso_to_datetime(r["updated_at"]) or datetime.now(timezone.utc),
                 ))
@@ -619,6 +650,27 @@ class Database:
             )
         except sqlite3.Error as exc:
             self._log.error("delete_knowledge_entries failed: {}", exc)
+
+    def get_post_mortems_by_pattern(self, pattern: str) -> list[dict[str, Any]]:
+        """Fetch post-mortems whose market_slug contains keywords from the pattern.
+
+        Uses the first meaningful words (length > 3) from the pattern as fuzzy
+        LIKE matches against market_slug. Returns an empty list if no meaningful
+        words exist or on DB error.
+        """
+        words = [w for w in pattern.lower().replace("-", " ").split() if len(w) > 3]
+        if not words:
+            return []
+        try:
+            clauses = " OR ".join("market_slug LIKE ?" for _ in words)
+            params = [f"%{w}%" for w in words]
+            cur = self._conn.execute(
+                f"SELECT * FROM post_mortems WHERE {clauses}", params
+            )
+            return [dict(r) for r in cur.fetchall()]
+        except sqlite3.Error as exc:
+            self._log.error("get_post_mortems_by_pattern failed: {}", exc)
+            return []
 
     # =====================================================
     # Compound layer: performance snapshots

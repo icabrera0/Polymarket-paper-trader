@@ -53,7 +53,9 @@ _POST_MORTEM_SYSTEM = (
     '- "root_cause": string (max 300 chars) — specific cause of the outcome\n'
     '- "lesson": string (max 200 chars) — actionable rule to apply in future trades\n'
     '- "market_pattern": string (max 150 chars) — abstract pattern this market '
-    "belongs to (used for knowledge base lookup)"
+    "belongs to (used for knowledge base lookup)\n"
+    '- "category": one of politics, economics, sports, crypto, legal, science, '
+    "entertainment, general — inferred from the market question and market slug"
 )
 
 
@@ -120,9 +122,17 @@ class CompoundEngine:
         market_pattern = (
             result.get("market_pattern") or position.market_slug or "general"
         )[:150]
-        self._update_knowledge_base(pm, market_pattern)
+        _VALID_CATEGORIES = {
+            "politics", "economics", "sports", "crypto",
+            "legal", "science", "entertainment", "general",
+        }
+        category = (result.get("category") or "general").lower().strip()
+        if category not in _VALID_CATEGORIES:
+            category = "general"
+        self._update_knowledge_base(pm, market_pattern, category)
         self._append_outcome_record(pm, position)
         self._rebuild_report()
+        self._cull_knowledge_base()
 
         self._log.info(
             "Post-mortem | trade={} | category={} | pnl={:+.1%} | lesson={}",
@@ -163,10 +173,40 @@ class CompoundEngine:
                 1 + overlap * 0.3 + (0.2 if keyword_hit else 0)
             )
 
-        ranked = sorted(entries, key=_relevance, reverse=True)[:max_lessons]
-        ranked = [e for e in ranked if e.confidence >= 0.3]
+        market_category = self._infer_category(market_question)
+        ranked = sorted(entries, key=_relevance, reverse=True)[:max_lessons * 3]
+        # Fix 2: filter by category — only inject lessons that match this market's
+        # category or are tagged "general" (universal lessons)
+        ranked = [e for e in ranked if e.category in (market_category, "general")]
+        # Fix 1: raise confidence threshold from 0.3 to 0.5
+        ranked = [e for e in ranked if e.confidence >= 0.5]
+        ranked = ranked[:max_lessons]
         if not ranked:
             return ""
+
+        # Fix 3: contradiction detection — keyword-based, no LLM call
+        _AVOID_KEYWORDS = {"avoid", "don't trade", "do not trade", "skip", "stay out"}
+        _BUY_KEYWORDS = {"buy", "trade when", "enter when", "take position"}
+        contradiction_warning = ""
+        by_cat: dict[str, list[KnowledgeBaseEntry]] = {}
+        for e in ranked:
+            by_cat.setdefault(e.category, []).append(e)
+        for cat, cat_entries in by_cat.items():
+            has_avoid = any(
+                any(kw in e.lesson.lower() for kw in _AVOID_KEYWORDS)
+                for e in cat_entries
+            )
+            has_buy = any(
+                any(kw in e.lesson.lower() for kw in _BUY_KEYWORDS)
+                for e in cat_entries
+            )
+            if has_avoid and has_buy:
+                contradiction_warning = (
+                    f"\n\n⚠ Contradictory lessons found in category '{cat}'. "
+                    f"Weight by confidence: higher confidence takes precedence. "
+                    f"When in doubt, default to WAIT."
+                )
+                break
 
         lines = ["## Past lessons from similar markets"]
         for e in ranked:
@@ -174,7 +214,7 @@ class CompoundEngine:
                 f"- [{e.failure_category.value}] {e.lesson} "
                 f"(confidence={e.confidence:.0%}, confirmed {e.times_confirmed}x)"
             )
-        return "\n".join(lines)
+        return "\n".join(lines) + contradiction_warning
 
     # =====================================================
     # Public: metrics
@@ -332,7 +372,9 @@ class CompoundEngine:
     # Private: knowledge base
     # =====================================================
 
-    def _update_knowledge_base(self, pm: PostMortem, market_pattern: str) -> None:
+    def _update_knowledge_base(
+        self, pm: PostMortem, market_pattern: str, category: str = "general"
+    ) -> None:
         """Upsert a lesson: reinforce existing pattern or insert new entry."""
         entries = self.db.get_knowledge_base(limit=200)
         existing = next(
@@ -353,8 +395,120 @@ class CompoundEngine:
                 failure_category=pm.failure_category,
                 confidence=0.4,
                 times_confirmed=1,
+                category=category,
             )
             self.db.save_knowledge_entry(entry)
+
+    def _infer_category(self, question: str) -> str:
+        """Infer market category from question text using keyword matching."""
+        q = question.lower()
+        if any(w in q for w in (
+            "election", "president", "senate", "congress", "vote", "minister",
+            "parliament", "ballot", "party", "democrat", "republican",
+        )):
+            return "politics"
+        if any(w in q for w in (
+            "bitcoin", "eth", "crypto", "token", "coin", "blockchain",
+            "defi", "nft", "solana", "binance",
+        )):
+            return "crypto"
+        if any(w in q for w in (
+            "match", "team", "player", "championship", "tournament", "vs",
+            "league", "soccer", "football", "basketball", "tennis", "olympic",
+        )):
+            return "sports"
+        if any(w in q for w in (
+            "gdp", "inflation", "fed", "interest rate", "recession",
+            "unemployment", "economy", "market cap", "earnings", "stock", "bond",
+        )):
+            return "economics"
+        if any(w in q for w in (
+            "court", "trial", "lawsuit", "verdict", "judge", "legal",
+            "arrest", "indicted", "convicted",
+        )):
+            return "legal"
+        if any(w in q for w in (
+            "climate", "temperature", "earthquake", "hurricane", "scientific",
+            "vaccine", "virus", "pandemic", "discovery",
+        )):
+            return "science"
+        if any(w in q for w in (
+            "oscar", "grammy", "movie", "film", "celebrity", "music",
+            "album", "box office", "streaming",
+        )):
+            return "entertainment"
+        return "general"
+
+    def _cull_knowledge_base(self) -> None:
+        """Demote or delete KB entries whose patterns have poor win rates across 5+ trades.
+
+        - Loads all KB entries with times_confirmed >= 5.
+        - Fetches associated post-mortems for each entry via fuzzy pattern match.
+        - If win_rate (pnl_pct > 0 / total) < 0.40: halves confidence.
+        - If halved confidence < 0.1: deletes the entry entirely.
+        - All failures are non-fatal (logged at WARNING level).
+        """
+        try:
+            entries = self.db.get_knowledge_base(limit=500)
+            to_delete: list[str] = []
+            to_update: list[tuple[str, int, float]] = []  # (id, times_confirmed, new_confidence)
+
+            for entry in entries:
+                if entry.times_confirmed < 5:
+                    continue
+
+                try:
+                    post_mortems = self.db.get_post_mortems_by_pattern(entry.market_pattern)
+                except Exception as exc:
+                    self._log.warning(
+                        "KB cull: could not fetch post-mortems for pattern '{}': {}",
+                        entry.market_pattern, exc,
+                    )
+                    continue
+
+                if not post_mortems:
+                    continue
+
+                wins = sum(1 for pm in post_mortems if (pm.get("pnl_pct") or 0.0) > 0)
+                total = len(post_mortems)
+                if total == 0:
+                    continue
+
+                win_rate = wins / total
+                if win_rate < 0.40:
+                    new_confidence = entry.confidence * 0.5
+                    if new_confidence < 0.1:
+                        to_delete.append(entry.id)
+                        action = "DELETED"
+                    else:
+                        to_update.append((entry.id, entry.times_confirmed, new_confidence))
+                        action = f"halved → {new_confidence:.2f}"
+                    self._log.debug(
+                        "KB cull: pattern='{}' win_rate={:.0%} → confidence {:.2f} → {}",
+                        entry.market_pattern,
+                        win_rate,
+                        entry.confidence,
+                        action,
+                    )
+
+            if to_delete:
+                self.db.delete_knowledge_entries(to_delete)
+                self._log.info("KB cull: deleted {} low-win-rate entries", len(to_delete))
+
+            for entry_id, times_confirmed, new_confidence in to_update:
+                try:
+                    self.db.update_knowledge_entry_confidence(entry_id, times_confirmed, new_confidence)
+                except Exception as exc:
+                    self._log.warning("KB cull: failed to update entry {}: {}", entry_id, exc)
+
+            if to_delete or to_update:
+                self._log.info(
+                    "KB cull complete: {} deleted, {} confidence-halved",
+                    len(to_delete),
+                    len(to_update),
+                )
+        except Exception as exc:
+            self._log.warning("_cull_knowledge_base failed (non-fatal): {}", exc)
 
     def _prune_knowledge_base(self, min_confidence: float = 0.2) -> None:
         entries = self.db.get_knowledge_base(limit=500)

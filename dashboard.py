@@ -1137,6 +1137,87 @@ def render_history(db: Database) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, height=440)
 
 
+# ── Panel Vote helpers (Team 4) ───────────────────────────────────────────────
+
+_PANEL_REC_COLORS = {
+    "BUY_YES":           ("var(--blue)",  "#E8F0FE"),
+    "BUY_NO":            ("var(--red)",   "#FDE8EC"),
+    "WAIT":              ("#D97706",      "#FEF3C7"),
+    "INSUFFICIENT_DATA": ("var(--muted)", "#F3F4F6"),
+}
+
+
+def _parse_panel_prefix(summary: str) -> list[tuple[str, str, str]] | None:
+    """Parses the [PANEL: Q=BUY_YES/85, D=WAIT/30, A=WAIT/45] prefix.
+
+    Returns a list of (agent_label, recommendation, confidence) tuples, or None
+    if the prefix is not present or cannot be parsed.
+    """
+    import re
+
+    if not summary or not summary.startswith("[PANEL:"):
+        return None
+    bracket_end = summary.find("]")
+    if bracket_end < 0:
+        return None
+    prefix_content = summary[7:bracket_end].strip()
+    agent_map = {"Q": "Quant", "D": "Domain Expert", "A": "Adversarial"}
+    votes: list[tuple[str, str, str]] = []
+    for token in prefix_content.split(","):
+        token = token.strip()
+        m = re.match(r"([QDA])=([A-Z_]+)/(\d+)", token)
+        if m:
+            key, rec, conf = m.group(1), m.group(2), m.group(3)
+            votes.append((agent_map.get(key, key), rec, conf))
+    return votes if votes else None
+
+
+def _render_panel_vote(row: dict | None) -> None:
+    """Renders the Panel Vote expandable for the most recent analysis."""
+    if row is None:
+        return
+    summary = row.get("summary", "") or ""
+    votes = _parse_panel_prefix(summary)
+    if votes is None:
+        return
+    final_rec = row.get("recommendation", "WAIT")
+    market_q = (row.get("market_question") or "")[:60]
+    with st.expander("Panel Vote — most recent analysis", expanded=False):
+        st.markdown(
+            f'<div style="font-family:\'DM Sans\',sans-serif;font-size:0.82rem;'
+            f'color:var(--muted);margin-bottom:0.75rem;">'
+            f'{html_mod.escape(market_q)}</div>',
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(len(votes) + 1)
+        for idx, (agent_label, rec, conf) in enumerate(votes):
+            color, bg = _PANEL_REC_COLORS.get(rec, ("var(--muted)", "#F3F4F6"))
+            cols[idx].markdown(
+                f'<div style="background:{bg};border-radius:8px;padding:10px 12px;text-align:center;">'
+                f'<div style="font-family:\'DM Sans\',sans-serif;font-size:0.72rem;font-weight:600;'
+                f'color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">'
+                f'{html_mod.escape(agent_label)}</div>'
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;'
+                f'font-weight:600;color:{color};">{html_mod.escape(rec)}</div>'
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.75rem;'
+                f'color:var(--muted);">{conf}%</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        final_color, final_bg = _PANEL_REC_COLORS.get(final_rec, ("var(--muted)", "#F3F4F6"))
+        cols[-1].markdown(
+            f'<div style="background:{final_bg};border:2px solid {final_color};border-radius:8px;'
+            f'padding:10px 12px;text-align:center;">'
+            f'<div style="font-family:\'DM Sans\',sans-serif;font-size:0.72rem;font-weight:600;'
+            f'color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">'
+            f'Final Call</div>'
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;'
+            f'font-weight:700;color:{final_color};">{html_mod.escape(final_rec)}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
 # ── LLM Analysis Tab ──────────────────────────────────────────────────────────
 
 def render_analyses(db: Database) -> None:
@@ -1171,6 +1252,9 @@ def render_analyses(db: Database) -> None:
     } for r in rows]
     st.dataframe(pd.DataFrame(data), use_container_width=True, height=360)
 
+    # Panel vote breakdown for most recent analysis
+    _render_panel_vote(rows[0] if rows else None)
+
     from collections import Counter
     recs = [r["recommendation"] for r in rows if r.get("recommendation")]
     if recs:
@@ -1196,8 +1280,10 @@ def render_analyses(db: Database) -> None:
 
 # ── Learnings Tab ─────────────────────────────────────────────────────────────
 
-_REPORT_FILE = PROJECT_ROOT / "data" / "llm_report.md"
-_OUTCOMES_FILE = PROJECT_ROOT / "data" / "llm_outcomes.jsonl"
+_REPORT_FILE       = PROJECT_ROOT / "data" / "llm_report.md"
+_OUTCOMES_FILE     = PROJECT_ROOT / "data" / "llm_outcomes.jsonl"
+_SOCIAL_STATS_FILE = PROJECT_ROOT / "data" / "social_stats.json"
+_FILTER_STATS_PATH = PROJECT_ROOT / "data" / "filter_stats.json"
 
 
 def render_learnings(db: Database) -> None:
@@ -1286,6 +1372,57 @@ def render_learnings(db: Database) -> None:
         ))
         _chart_style(fig2, height=180)
         st.plotly_chart(fig2, use_container_width=True)
+
+        # ── KB Health ─────────────────────────────────────────────────────────
+        st.markdown(_sh("Knowledge Base Health"), unsafe_allow_html=True)
+        h1, h2, h3, h4 = st.columns(4)
+        avg_conf = sum(e.confidence for e in entries) / len(entries)
+        at_risk  = sum(1 for e in entries if e.confidence < 0.2)
+        high_conf = sum(1 for e in entries if e.confidence >= 0.6)
+        h1.metric("Total Entries", len(entries))
+        h2.metric("Avg Confidence", f"{avg_conf:.0%}")
+        h3.metric("High Confidence (≥60%)", high_conf)
+        h4.metric("At Risk (<20%)", at_risk, delta=f"-{at_risk}" if at_risk else None,
+                  delta_color="inverse")
+
+        # Topic category breakdown (the new compound.py `category` field)
+        topic_cats = Counter(getattr(e, "category", "general") for e in entries)
+        if len(topic_cats) > 1 or list(topic_cats.keys()) != ["general"]:
+            topic_color_map = {
+                "politics":      "#2563EB",
+                "economics":     "#16A34A",
+                "crypto":        "#D97706",
+                "sports":        "#7C3AED",
+                "legal":         "#0891B2",
+                "science":       "#0D9488",
+                "entertainment": "#E11D48",
+                "general":       "#8A96A8",
+            }
+            fig3 = go.Figure(go.Bar(
+                x=list(topic_cats.keys()), y=list(topic_cats.values()),
+                marker_color=[topic_color_map.get(k, "#8A96A8") for k in topic_cats.keys()],
+                marker_line_width=0, marker_cornerradius=4,
+                text=list(topic_cats.values()), textposition="outside",
+                textfont=dict(color="#8A96A8", size=11),
+            ))
+            _chart_style(fig3, height=160)
+            fig3.update_layout(xaxis_title="Topic domain", yaxis_title="Entries")
+            st.plotly_chart(fig3, use_container_width=True)
+
+        # Confidence distribution histogram
+        confs = [e.confidence for e in entries]
+        fig4 = go.Figure(go.Histogram(
+            x=confs, nbinsx=10,
+            marker_color="#2563EB", marker_line_width=0,
+            opacity=0.8,
+        ))
+        fig4.add_vline(x=0.1, line_dash="dash", line_color="#E11D48",
+                       annotation_text="cull threshold", annotation_position="top right",
+                       annotation_font_color="#E11D48")
+        _chart_style(fig4, height=150)
+        fig4.update_layout(xaxis_title="Confidence", yaxis_title="Count",
+                           xaxis=dict(tickformat=".0%", range=[0, 1]))
+        st.plotly_chart(fig4, use_container_width=True)
     else:
         st.info("No lessons yet — lessons are generated automatically after each trade closes.")
 
@@ -1338,10 +1475,11 @@ def render_balance_manager(db: Database, config) -> None:
         unsafe_allow_html=True,
     )
 
-    history  = db.get_balance_history()
-    current  = float(history[-1]["balance_eur"]) if history else config.paper_trading.initial_balance_eur
-    peak     = float(history[-1]["peak_balance"]) if history else current
-    open_pos = db.get_open_positions()
+    history             = db.get_balance_history()
+    current             = float(history[-1]["balance_eur"]) if history else config.paper_trading.initial_balance_eur
+    peak                = float(history[-1]["peak_balance"]) if history else current
+    open_pos            = db.get_open_positions()
+    consolidated_profit = db.get_consolidated_profit()
 
     st.markdown(
         '<div class="stat-row">'
@@ -1349,6 +1487,23 @@ def render_balance_manager(db: Database, config) -> None:
         + _stat_card("All-time Peak",    f"€{peak:.2f}")
         + _stat_card("Initial (config)", f"€{config.paper_trading.initial_balance_eur:.2f}")
         + _stat_card("Positions", f"{len(open_pos)}", "open")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="stat-row" style="grid-template-columns: repeat(2, 1fr);">'
+        + _stat_card(
+            "Consolidated Profit",
+            f"€{consolidated_profit:.2f}",
+            "swept from trading balance",
+            "pos" if consolidated_profit > 0 else "neutral",
+        )
+        + _stat_card(
+            "Total Value",
+            f"€{current + consolidated_profit:.2f}",
+            "balance + profit",
+            "pos" if consolidated_profit > 0 else "neutral",
+        )
         + '</div>',
         unsafe_allow_html=True,
     )
@@ -1561,10 +1716,12 @@ def main() -> None:
         "Overview",
         "Positions",
         "History",
-        "LLM Analysis",
+        "Analyses",
         "Balance",
         "Backtest",
         "Learnings",
+        "Social Signals",
+        "Scanner",
     ])
 
     with tabs[0]: render_overview(db, config)
@@ -1574,11 +1731,129 @@ def main() -> None:
     with tabs[4]: render_balance_manager(db, config)
     with tabs[5]: render_backtest(config)
     with tabs[6]: render_learnings(db)
+    with tabs[7]: render_social_signals(config)
+    with tabs[8]: render_scanner_stats()
 
     db.close()
 
-    time.sleep(refresh)
-    st.rerun()
+
+# ── Social Signals Tab (Team 3) ───────────────────────────────────────────────
+
+def render_social_signals(config) -> None:
+    """Social Signals tab — shows counts from the last SocialIngestor cycle."""
+    st.markdown(
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:1rem;">'
+        'Social Signals</div>',
+        unsafe_allow_html=True,
+    )
+    social_cfg = getattr(config, "social", None)
+    if social_cfg is None or not social_cfg.enabled:
+        st.info("Social ingestor is disabled. Set `social.enabled: true` in `config/settings.yaml`.")
+        return
+    stats: dict = {}
+    if _SOCIAL_STATS_FILE.exists():
+        try:
+            stats = json.loads(_SOCIAL_STATS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            stats = {}
+    telegram_count = stats.get("telegram", 0)
+    reddit_count   = stats.get("reddit", 0)
+    rss_count      = stats.get("rss", 0)
+    total_count    = telegram_count + reddit_count + rss_count
+    last_updated   = stats.get("updated_at", "—")
+    if last_updated and last_updated != "—":
+        try:
+            last_updated = last_updated[:19].replace("T", " ")
+        except Exception:
+            pass
+    st.markdown(_sh("Source Status", f"last cycle: {last_updated}"), unsafe_allow_html=True)
+    sources = [
+        ("Telegram", getattr(social_cfg.telegram, "enabled", False),
+         f"{len(getattr(social_cfg.telegram, 'channels', []))} channels"),
+        ("Reddit",   getattr(social_cfg.reddit, "enabled", False),
+         f"{len(getattr(social_cfg.reddit, 'subreddits', []))} subreddits"),
+        ("RSS",      getattr(social_cfg.rss, "enabled", False),
+         f"{len(getattr(social_cfg.rss, 'feeds', []))} feeds"),
+    ]
+    cols = st.columns(3)
+    for col, (name, enabled, detail) in zip(cols, sources):
+        color = "#059669" if enabled else "#5A6580"
+        with col:
+            st.markdown(
+                f'<div class="stat-card">'
+                f'<span class="stat-label">{name} {"✓" if enabled else "—"}</span>'
+                f'<div class="stat-sub">{detail}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(_sh("Articles Fetched — Last Cycle"), unsafe_allow_html=True)
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Telegram", str(telegram_count), "messages")
+        + _stat_card("Reddit",   str(reddit_count),   "posts")
+        + _stat_card("RSS",      str(rss_count),       "items")
+        + _stat_card("Total",    str(total_count),     "social articles")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    if not stats:
+        st.info("No social stats yet — bot writes `data/social_stats.json` after each cycle.")
+
+
+# ── Scanner Stats Tab (Team 6) ────────────────────────────────────────────────
+
+def render_scanner_stats() -> None:
+    """Market Scanner tab — shows pre-analysis filter stats from filter_stats.json."""
+    st.markdown(
+        '<div style="font-family:\'DM Sans\',sans-serif;font-size:1.05rem;'
+        'font-weight:700;color:var(--text);margin-bottom:1rem;">Market Scanner</div>',
+        unsafe_allow_html=True,
+    )
+    if not _FILTER_STATS_PATH.exists():
+        st.info(
+            "No filter stats yet — start the bot and wait for the first scan cycle. "
+            "Stats are written to `data/filter_stats.json`."
+        )
+        return
+    try:
+        raw = json.loads(_FILTER_STATS_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        st.error(f"Could not read filter_stats.json: {exc}")
+        return
+    scanned  = raw.get("markets_scanned",  0)
+    passed   = raw.get("markets_passed",   0)
+    rejected = raw.get("markets_rejected", 0)
+    ts       = (raw.get("timestamp", "") or "")[:19].replace("T", " ")
+    pass_rate = (passed / scanned * 100) if scanned > 0 else 0.0
+    st.markdown(_sh("Last Scan Cycle", ts), unsafe_allow_html=True)
+    st.markdown(
+        '<div class="stat-row">'
+        + _stat_card("Scanned",  str(scanned),          "raw markets")
+        + _stat_card("Passed",   str(passed),            f"{pass_rate:.0f}% pass rate")
+        + _stat_card("Rejected", str(rejected),          "by pre-filters")
+        + _stat_card("Pass Rate", f"{pass_rate:.0f}%",  f"{passed}/{scanned}")
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+    rejections: dict = raw.get("rejections", {})
+    st.markdown(_sh("Filter Breakdown"), unsafe_allow_html=True)
+    if not rejections:
+        st.success("All scanned markets passed the filters in the last cycle.")
+    else:
+        label_map = {
+            "low_volume":        "Low Volume",
+            "closing_soon":      "Closing Soon (<12h)",
+            "wide_spread":       "Wide Spread",
+            "excluded_category": "Excluded Category",
+        }
+        with st.expander("Rejection Counts", expanded=True):
+            col1, col2 = st.columns(2)
+            for k, count in rejections.items():
+                label = label_map.get(k, k)
+                col1.markdown(f"**{label}**")
+                col2.markdown(str(count))
 
 
 if __name__ == "__main__":

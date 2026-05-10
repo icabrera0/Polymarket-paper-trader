@@ -46,6 +46,7 @@ from src.decision_engine import DecisionEngine
 from src.market_scanner import MarketScanner
 from src.models import CloseReason, DecisionAction, TradeDecision, TradeRecommendation, TradeSide
 from src.news_ingestor import NewsIngestor
+from src.social_ingestor import SocialIngestor
 from src.notification_system import NotificationSystem
 from src.paper_trader import PaperTrader
 from src.report_generator import ReportGenerator
@@ -126,6 +127,7 @@ class Orchestrator:
         self.paper_trader = PaperTrader(config, self.risk_manager, self.db)
         self.market_scanner = MarketScanner(config)
         self.news_ingestor = NewsIngestor(config)
+        self.social_ingestor = SocialIngestor(config) if getattr(config, "social", None) and config.social.enabled else None
         self.compound = CompoundEngine(config, self.db)
         self.sentiment_analyzer = SentimentAnalyzer(config, compound=self.compound)
         self.decision_engine = DecisionEngine(config, self.risk_manager)
@@ -390,6 +392,9 @@ class Orchestrator:
                 articles = self.news_ingestor.fetch(
                     keywords, max_articles=10, fallback_timespan=fallback_ts
                 )
+                if self.social_ingestor is not None:
+                    social_articles = self.social_ingestor.fetch_all(keywords)
+                    articles = articles + social_articles
                 self._log.info(
                     "[{}] start #{} '{}' ({} arts)",
                     worker, idx, market.question[:50], len(articles),

@@ -56,6 +56,10 @@ market_filters:
   min_time_to_close_hours: 2           # Markets closing in <2h are discarded
   max_time_to_close_days: 30           # Far-future markets carry too much uncertainty
   exclude_categories: ["Sports", "Esports"]  # Match markets: in-play gap risk kills SL
+  # Pre-analysis structural filters (applied BEFORE the LLM is called)
+  min_volume_usd: 10000                # Same as min_volume_24h_usd — independently tuneable
+  min_hours_to_close: 12               # Skip markets closing in <12h (gap-risk protection)
+  max_spread_cost: 0.06                # Skip if 1 - yes_price - no_price > 0.06 (illiquid)
 
 # ---------------------------------------------------
 # News sources
@@ -291,6 +295,41 @@ sports_in_play:
   stop_loss_pct: 0.50                    # SL at -50% (wider to absorb swings)
   take_profit_pct: 0.80                  # TP at +80% (exit before market closes)
   scan_categories: ["Sports", "Esports"] # Categories to scan
+
+# ---------------------------------------------------
+# Social media ingestion (Telegram, Reddit, RSS)
+# Reddit: free credentials at https://www.reddit.com/prefs/apps (create "script" app)
+# Telegram: reuses TELEGRAM_API_ID / TELEGRAM_API_HASH from .env — separate session file
+# ---------------------------------------------------
+social:
+  enabled: true
+  telegram:
+    enabled: true
+    channels:
+      - "polymarket_signals"
+      - "predictionmarkets"
+    max_posts_per_channel: 20
+    max_age_hours: 24
+  reddit:
+    enabled: true
+    subreddits:
+      - "Polymarket"
+      - "PredictionMarkets"
+      - "worldnews"
+      - "politics"
+    max_posts_per_subreddit: 15
+    max_age_hours: 12
+    client_id: ""                       # Required — get free at reddit.com/prefs/apps
+    client_secret: ""                   # Required — get free at reddit.com/prefs/apps
+    user_agent: "polymarket-bot/1.0"
+  rss:
+    enabled: true
+    feeds:
+      - "https://feeds.bbci.co.uk/news/rss.xml"
+      - "https://rss.reuters.com/reuters/topNews"
+      - "https://feeds.npr.org/1001/rss.xml"
+    max_items_per_feed: 10
+    max_age_hours: 6
 
 # ---------------------------------------------------
 # Excel reports

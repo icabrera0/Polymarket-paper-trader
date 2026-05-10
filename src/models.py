@@ -437,16 +437,18 @@ class KnowledgeBaseEntry(BaseModel):
     failure_category: FailureCategory
     confidence:       float = Field(ge=0.0, le=1.0, default=0.4)
     times_confirmed:  int = 0
+    category:         str = "general"
     created_at:       datetime = Field(default_factory=_now_utc)
     updated_at:       datetime = Field(default_factory=_now_utc)
 
 
 class PerformanceSnapshot(BaseModel):
-    snapshot_date:  date
-    win_rate:       float = 0.0
-    sharpe_ratio:   float = 0.0
-    max_drawdown:   float = 0.0
-    profit_factor:  float = 0.0
-    brier_score:    float = 0.0
-    total_trades:   int = 0
-    open_positions: int = 0
+    snapshot_date:           date
+    win_rate:                float = 0.0
+    sharpe_ratio:            float = 0.0
+    max_drawdown:            float = 0.0
+    profit_factor:           float = 0.0
+    brier_score:             float = 0.0
+    total_trades:            int = 0
+    open_positions:          int = 0
+    consolidated_profit_eur: float = 0.0

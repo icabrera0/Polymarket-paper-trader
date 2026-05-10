@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
@@ -25,6 +26,9 @@ from loguru import logger
 from src.config_loader import BotConfig
 from src.gamma_client import GammaApiClient, GammaApiError
 from src.models import MarketSnapshot
+
+# Path for persisting filter stats for the dashboard
+_FILTER_STATS_PATH = Path(__file__).resolve().parent.parent / "data" / "filter_stats.json"
 
 # Scan cache TTL (seconds). Independent of the polling interval in config
 # (which controls how often the orchestrator decides to scan).
@@ -140,6 +144,42 @@ class MarketScanner:
     # Filters
     # =====================================================
 
+    def _passes_filters(self, market: MarketSnapshot) -> tuple[bool, str]:
+        """Pre-analysis gate: fast structural filters run BEFORE the LLM is called.
+
+        Returns (passes, rejection_reason). rejection_reason is an empty string
+        when the market passes. All fields are treated as Optional — missing data
+        means that specific filter is skipped, never a crash.
+
+        Filter thresholds are read exclusively from config so they can be tuned
+        in settings.yaml without touching code.
+        """
+        filters = self.filters
+
+        # --- 1. Volume filter ---
+        min_vol = filters.min_volume_usd
+        if market.volume_24h_usd is not None and market.volume_24h_usd < min_vol:
+            return False, f"low_volume:{market.volume_24h_usd:.0f}<{min_vol:.0f}"
+
+        # --- 2. Time-to-resolution filter ---
+        min_hours = filters.min_hours_to_close
+        ttc = market.time_to_close_hours
+        if ttc is not None and ttc < min_hours:
+            return False, f"closing_soon:{ttc:.1f}h<{min_hours:.0f}h"
+
+        # --- 3. Spread/liquidity filter (proxy: 1 - yes_price - no_price) ---
+        # Only applied when both prices are available (they always are in a parsed
+        # MarketSnapshot, but we guard defensively in case of future model changes).
+        max_spread_cost = filters.max_spread_cost
+        yes_p = getattr(market, "yes_price", None)
+        no_p = getattr(market, "no_price", None)
+        if yes_p is not None and no_p is not None:
+            spread_cost = round(1.0 - yes_p - no_p, 6)
+            if spread_cost > max_spread_cost:
+                return False, f"wide_spread:{spread_cost:.3f}>{max_spread_cost:.3f}"
+
+        return True, ""
+
     def is_tradeable(self, market: MarketSnapshot) -> tuple[bool, list[str]]:
         """Decides whether a market passes the filters. Returns (ok, rejection_reasons)."""
         reasons: list[str] = []
@@ -166,6 +206,13 @@ class MarketScanner:
             excluded = [c.lower() for c in self.filters.exclude_categories]
             if market.category.lower() in excluded:
                 reasons.append("excluded_category")
+
+        # Pre-analysis structural filters (_passes_filters)
+        passes, pre_reason = self._passes_filters(market)
+        if not passes:
+            # Extract the prefix (e.g. "low_volume" from "low_volume:3000<5000")
+            prefix = pre_reason.split(":")[0]
+            reasons.append(prefix)
 
         return len(reasons) == 0, reasons
 
@@ -215,6 +262,11 @@ class MarketScanner:
             len(snapshots),
             len(tradeable),
             rejection_counter or "none",
+        )
+        self._write_filter_stats(
+            scanned=len(snapshots),
+            passed=len(tradeable),
+            rejections=rejection_counter,
         )
 
         self._cache = tradeable
@@ -412,6 +464,37 @@ class MarketScanner:
     # =====================================================
     # Private helpers
     # =====================================================
+
+    def _write_filter_stats(
+        self,
+        scanned: int,
+        passed: int,
+        rejections: dict[str, int],
+    ) -> None:
+        """Persists filter stats to data/filter_stats.json for the dashboard.
+
+        Writes atomically via a temp-and-rename pattern where possible.
+        Silently swallows any I/O errors so a stats write never blocks the scan.
+        """
+        try:
+            _FILTER_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            stats = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "markets_scanned": scanned,
+                "markets_passed": passed,
+                "markets_rejected": scanned - passed,
+                "rejections": rejections,
+                "config": {
+                    "min_volume_usd": self.filters.min_volume_usd,
+                    "min_hours_to_close": self.filters.min_hours_to_close,
+                    "max_spread_cost": self.filters.max_spread_cost,
+                },
+            }
+            tmp = _FILTER_STATS_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+            tmp.replace(_FILTER_STATS_PATH)
+        except Exception as exc:
+            self._log.debug("filter_stats.json write failed (non-fatal): {}", exc)
 
     @staticmethod
     def _safe_float(value: Any) -> Optional[float]:
