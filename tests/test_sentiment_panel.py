@@ -6,7 +6,7 @@ Covers:
 2. If one agent fails, remaining 2 still produce a result (no exception raised)
 3. If all 3 fail, falls back to single-agent path
 4. Synthesis applies the 2-agent WAIT majority rule correctly
-5. MIN_EDGE_FOR_TRADE is 0.10 (regression: below-10% edge returns WAIT)
+5. Edge threshold reads from config.market_filters.min_edge_for_trade (default 0.04)
 6. analyze() return type is always MarketAnalysis (never raises)
 
 All LLM calls are mocked — no real API calls.
@@ -34,7 +34,6 @@ from src.models import (
     _new_article_id,
 )
 from src.sentiment_analyzer import (
-    MIN_EDGE_FOR_TRADE,
     PANEL_ADVERSARIAL_PROMPT,
     PANEL_DOMAIN_PROMPT,
     PANEL_QUANT_PROMPT,
@@ -351,7 +350,7 @@ class TestAllAgentsFail:
         assert isinstance(result, MarketAnalysis)
 
         # Single-agent fallback was used — verify its response is reflected
-        # (prob=0.62 → edge=0.22 which passes MIN_EDGE_FOR_TRADE=0.10)
+        # (prob=0.62 → edge=0.22 which passes min_edge_for_trade=0.04)
         single_agent_calls = client._calls_for("risk-first quantitative analyst")
         assert len(single_agent_calls) == 1, (
             "Single-agent fallback was not called when all panel agents failed"
@@ -456,22 +455,22 @@ class TestSynthesisWaitMajority:
 
 
 # =====================================================
-# Test 5: MIN_EDGE_FOR_TRADE regression (must be 0.10)
+# Test 5: Edge threshold reads from config (min_edge_for_trade=0.04)
 # =====================================================
 
 
 class TestMinEdgeRegression:
-    def test_min_edge_constant_is_0_10(self):
-        """Regression: MIN_EDGE_FOR_TRADE must be exactly 0.10."""
-        assert MIN_EDGE_FOR_TRADE == 0.10, (
-            f"MIN_EDGE_FOR_TRADE is {MIN_EDGE_FOR_TRADE}, expected 0.10. "
-            "This was deliberately raised from 0.05 — do not revert."
+    def test_edge_threshold_uses_config(self, config):
+        """Edge threshold reads from config.market_filters.min_edge_for_trade (default 0.04)."""
+        # Default config has min_edge_for_trade=0.04
+        assert config.market_filters.min_edge_for_trade == 0.04, (
+            f"Expected default min_edge_for_trade=0.04, got {config.market_filters.min_edge_for_trade}"
         )
 
-    def test_edge_of_9_pct_returns_wait(self, config):
-        """An edge of 9% (0.09) is below the 10% threshold → must WAIT."""
-        # market price=0.40, consensus=0.49 → edge=0.09 (below 0.10)
-        synthesis_resp = _buy_yes_response(prob=0.49, confidence=72, rec="BUY_YES")
+    def test_edge_of_3_pct_returns_wait(self, config):
+        """An edge of 3% (0.03) is below the 4% config threshold → must WAIT."""
+        # market price=0.40, consensus=0.43 → edge=0.03 (below 0.04)
+        synthesis_resp = _buy_yes_response(prob=0.43, confidence=72, rec="BUY_YES")
         client = PanelFakeLLMClient(
             default_response=(synthesis_resp, _DEFAULT_META),
         )
@@ -480,16 +479,16 @@ class TestMinEdgeRegression:
             make_market(yes_price=0.40),
             [make_article(f"Article {i}") for i in range(3)],
         )
-        # _validate() must downgrade to WAIT because |edge|=0.09 < 0.10
+        # _validate() must downgrade to WAIT because |edge|=0.03 < 0.04
         assert result.recommendation == TradeRecommendation.WAIT, (
-            f"Expected WAIT for 9% edge but got {result.recommendation}. "
-            "MIN_EDGE_FOR_TRADE regression."
+            f"Expected WAIT for 3% edge but got {result.recommendation}. "
+            "min_edge_for_trade config regression."
         )
 
-    def test_edge_of_10_pct_can_trade(self, config):
-        """An edge of exactly 10% (0.10) meets the threshold → may trade."""
-        # market price=0.40, consensus=0.50 → edge=0.10 (at threshold)
-        synthesis_resp = _buy_yes_response(prob=0.50, confidence=72, rec="BUY_YES")
+    def test_edge_of_5_pct_can_trade(self, config):
+        """An edge of 5% (0.05) is above the 4% config threshold → may trade."""
+        # market price=0.40, consensus=0.45 → edge=0.05 (above 0.04)
+        synthesis_resp = _buy_yes_response(prob=0.45, confidence=72, rec="BUY_YES")
         client = PanelFakeLLMClient(
             default_response=(synthesis_resp, _DEFAULT_META),
         )
@@ -498,8 +497,7 @@ class TestMinEdgeRegression:
             make_market(yes_price=0.40),
             [make_article(f"Article {i}") for i in range(3)],
         )
-        # Edge=0.10 is not strictly less than MIN_EDGE_FOR_TRADE → allowed through
-        # (conf=72 >= 60 threshold from config)
+        # Edge=0.05 > 0.04 threshold → allowed through (conf=72 >= 60)
         assert result.recommendation == TradeRecommendation.BUY_YES
 
     def test_edge_of_15_pct_can_trade(self, config):
@@ -516,10 +514,10 @@ class TestMinEdgeRegression:
         assert result.recommendation == TradeRecommendation.BUY_YES
 
     def test_edge_below_threshold_on_buy_no(self, config):
-        """BUY_NO with |edge|=0.08 (below 0.10) → must WAIT."""
-        # market price=0.60, consensus=0.52 → edge=-0.08 (|edge|=0.08)
+        """BUY_NO with |edge|=0.02 (below 0.04 config threshold) → must WAIT."""
+        # market price=0.60, consensus=0.58 → edge=-0.02 (|edge|=0.02)
         synthesis_resp = {
-            "consensus_probability_yes": 0.52,
+            "consensus_probability_yes": 0.58,
             "confidence": 72,
             "sentiment_score": -0.3,
             "impact_score": 55.0,
@@ -527,7 +525,7 @@ class TestMinEdgeRegression:
             "timeframe": "HOURS",
             "contradictory_sources": False,
             "summary": "...",
-            "justification": "Edge is -0.08.",
+            "justification": "Edge is -0.02.",
         }
         client = PanelFakeLLMClient(
             default_response=(synthesis_resp, _DEFAULT_META),

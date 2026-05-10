@@ -613,3 +613,159 @@ def test_llm_monitor_parses_trace_events(tmp_path):
     assert events[0]["event"] == "PANEL_START"
     assert events[1]["event"] == "AGENT_RESULT"
     assert events[1]["agent"] == "Quant"
+
+
+# =====================================================
+# Panel probability metrics (Task 3)
+# =====================================================
+
+
+import statistics
+from src.models import MarketAnalysis, TradeRecommendation
+
+
+def test_panel_std_dev_computed(config, tmp_path):
+    """panel_std_dev should equal stdev of the 3 agent probabilities."""
+    from src.sentiment_analyzer import SentimentAnalyzer
+    from src.models import MarketSnapshot
+
+    market = MarketSnapshot(
+        market_id="m1",
+        question="Test?",
+        yes_token_id="y",
+        no_token_id="n",
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.01,
+        volume_24h_usd=50000,
+        volume_total_usd=100000,
+        liquidity_usd=20000,
+    )
+
+    analyzer = SentimentAnalyzer(config)
+
+    probs = [0.60, 0.70, 0.55]
+    expected_std = statistics.stdev(probs)
+
+    synth_parsed = {
+        "recommendation": "WAIT",
+        "confidence": 0,
+        "consensus_probability_yes": 0.617,
+        "sentiment_score": 0.0,
+        "impact_score": 0.0,
+        "timeframe": "UNKNOWN",
+        "contradictory_sources": False,
+        "summary": "Panel: WAIT",
+        "justification": "Rule 1",
+    }
+
+    with patch.object(analyzer, "_call_single_agent") as mock_agent:
+        # First 3 calls = panel agents; 4th call = synthesis
+        mock_agent.side_effect = [
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.60,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.70,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.55,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            (synth_parsed, {"input_tokens": 200, "output_tokens": 100}, True),
+        ]
+        with patch("src.sentiment_analyzer.TRACE_FILE", tmp_path / "trace.jsonl"):
+            result = analyzer._run_panel(market, [], "dummy user prompt")
+
+    assert abs(result.panel_std_dev - expected_std) < 1e-6, (
+        f"panel_std_dev={result.panel_std_dev} expected {expected_std}"
+    )
+
+
+def test_mispricing_z_score_computed(config, tmp_path):
+    """mispricing_z_score = (consensus - market_price) / panel_std_dev."""
+    from src.sentiment_analyzer import SentimentAnalyzer
+    from src.models import MarketSnapshot
+
+    market = MarketSnapshot(
+        market_id="m2",
+        question="Test Z?",
+        yes_token_id="y2",
+        no_token_id="n2",
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.01,
+        volume_24h_usd=50000,
+        volume_total_usd=100000,
+        liquidity_usd=20000,
+    )
+
+    analyzer = SentimentAnalyzer(config)
+    probs = [0.60, 0.70, 0.55]
+    std_dev = statistics.stdev(probs)
+    consensus = 0.617
+    expected_z = (consensus - 0.50) / std_dev
+
+    synth_parsed = {
+        "recommendation": "WAIT",
+        "confidence": 0,
+        "consensus_probability_yes": consensus,
+        "sentiment_score": 0.0,
+        "impact_score": 0.0,
+        "timeframe": "UNKNOWN",
+        "contradictory_sources": False,
+        "summary": "test",
+        "justification": "test",
+    }
+
+    with patch.object(analyzer, "_call_single_agent") as mock_agent:
+        mock_agent.side_effect = [
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.60,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.70,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            ({"recommendation": "WAIT", "confidence": 50, "consensus_probability_yes": 0.55,
+              "sentiment_score": 0, "impact_score": 0, "timeframe": "UNKNOWN",
+              "contradictory_sources": False, "summary": "", "justification": ""},
+             {"input_tokens": 100, "output_tokens": 50}, True),
+            (synth_parsed, {"input_tokens": 200, "output_tokens": 100}, True),
+        ]
+        with patch("src.sentiment_analyzer.TRACE_FILE", tmp_path / "trace.jsonl"):
+            result = analyzer._run_panel(market, [], "dummy user prompt")
+
+    assert abs(result.mispricing_z_score - expected_z) < 1e-4
+
+
+def test_edge_threshold_reads_from_config(config):
+    """_validate() should use config.market_filters.min_edge_for_trade, not hardcoded 0.10."""
+    from src.sentiment_analyzer import SentimentAnalyzer
+
+    # Config has min_edge_for_trade=0.04 by default
+    analyzer = SentimentAnalyzer(config)
+
+    analysis = MarketAnalysis(
+        market_id="m3",
+        market_question="Test edge?",
+        yes_token_id="y3",
+        no_token_id="n3",
+        current_yes_price=0.50,
+        current_no_price=0.50,
+        consensus_probability_yes=0.55,  # edge = 0.05 — above 0.04, below old 0.10
+        edge=0.05,
+        confidence=70,
+        sentiment_score=0.5,
+        impact_score=50.0,
+        recommendation=TradeRecommendation.BUY_YES,
+    )
+
+    result = analyzer._validate(analysis)
+    # With min_edge_for_trade=0.04, edge=0.05 should NOT be downgraded to WAIT
+    assert result.recommendation == TradeRecommendation.BUY_YES, (
+        f"Expected BUY_YES but got {result.recommendation}"
+    )

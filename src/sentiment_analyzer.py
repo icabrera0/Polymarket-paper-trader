@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -61,13 +62,6 @@ from src.models import (
 # If the most recent article is older than this, we consider the analysis
 # not actionable and return INSUFFICIENT_DATA without calling the LLM.
 MAX_FRESH_AGE_HOURS = 48.0
-
-# Minimum edge for a trade to be worth recommending. Below this we
-# recommend WAIT even if the LLM says otherwise.
-# Raised from 0.05 → 0.10: Polymarket calibration research (Brier ~0.17)
-# shows 5% edges are within noise. A 10% edge is the minimum for a real
-# inefficiency.
-MIN_EDGE_FOR_TRADE = 0.10
 
 # Append-only JSONL file for LLM trace events (PANEL_START, AGENT_RESULT,
 # SYNTHESIS_RESULT). Can be patched in tests.
@@ -892,6 +886,13 @@ class SentimentAnalyzer:
         order = {name: i for i, (name, _) in enumerate(agent_specs)}
         panel_results.sort(key=lambda x: order.get(x[0], 99))
 
+        # Compute panel probability statistics for z-score and std dev
+        agent_probs = [
+            float(parsed.get("consensus_probability_yes", market.yes_price))
+            for _, parsed, _ in panel_results
+        ]
+        panel_std_dev = statistics.stdev(agent_probs) if len(agent_probs) >= 2 else 0.0
+
         # Emit AGENT_RESULT for each panel agent
         for name, parsed, meta in panel_results:
             self._emit_trace("AGENT_RESULT", {
@@ -969,6 +970,12 @@ class SentimentAnalyzer:
         consensus = float(synth_parsed.get("consensus_probability_yes", market.yes_price))
         consensus = max(0.0, min(1.0, consensus))
 
+        z_score = (
+            (consensus - market.yes_price) / panel_std_dev
+            if panel_std_dev > 1e-6
+            else 0.0
+        )
+
         # Build the panel vote prefix for the summary field (for dashboard display)
         votes: list[str] = []
         for name, parsed, _ in panel_results:
@@ -989,6 +996,8 @@ class SentimentAnalyzer:
             "final_probability": round(consensus, 4),
             "rules_triggered": str(synth_parsed.get("justification", ""))[:300],
             "total_tokens": total_input + total_output,
+            "panel_std_dev": round(panel_std_dev, 6),
+            "mispricing_z_score": round(z_score, 4),
         })
 
         return MarketAnalysis(
@@ -1014,6 +1023,8 @@ class SentimentAnalyzer:
             llm_model=self.cfg_llm.model,
             llm_input_tokens=total_input,
             llm_output_tokens=total_output,
+            panel_std_dev=round(panel_std_dev, 6),
+            mispricing_z_score=round(z_score, 4),
         )
 
     def _call_llm(
@@ -1115,7 +1126,7 @@ class SentimentAnalyzer:
         - Clips out-of-range values (Pydantic already validates types but not
           arbitrary float bounds without Field constraints; we are extra careful here).
         - If confidence < configured threshold, downgrade to WAIT.
-        - If absolute edge < MIN_EDGE_FOR_TRADE, downgrade to WAIT.
+        - If absolute edge < config.market_filters.min_edge_for_trade, downgrade to WAIT.
         - If recommendation says BUY_YES but edge is negative (or vice versa),
           that is an internal LLM contradiction → WAIT.
         """
@@ -1131,11 +1142,11 @@ class SentimentAnalyzer:
                     min_conf,
                 )
                 analysis.recommendation = TradeRecommendation.WAIT
-            elif abs(analysis.edge) < MIN_EDGE_FOR_TRADE - 1e-9:
+            elif abs(analysis.edge) < self.config.market_filters.min_edge_for_trade - 1e-9:
                 self._log.info(
                     "Downgrade to WAIT: |edge|={:.3f} < min={:.3f}",
                     abs(analysis.edge),
-                    MIN_EDGE_FOR_TRADE,
+                    self.config.market_filters.min_edge_for_trade,
                 )
                 analysis.recommendation = TradeRecommendation.WAIT
             elif (
