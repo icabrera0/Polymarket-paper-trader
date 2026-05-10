@@ -119,6 +119,8 @@ class Orchestrator:
         # When each zombie token was FIRST detected dead — never reset on
         # intermediate Gamma responses, only cleared on successful close.
         self._zombie_since: dict[str, float] = {}
+        # Kill switch: set True when dashboard writes kill_switch_active=true
+        self._kill_switch_active: bool = False
 
         # --- Modules ---
         self.clob_client = ClobApiClient()
@@ -308,6 +310,9 @@ class Orchestrator:
                 )
                 self.config.llm.llm_parallelism = new_par
 
+            # Kill switch — close all positions immediately if active
+            self._kill_switch_active = bool(data.get("kill_switch_active", False))
+
         except Exception as exc:
             self._log.warning("Error reading dashboard overrides: {}", exc)
 
@@ -320,6 +325,15 @@ class Orchestrator:
             return
         try:
             self._apply_overrides()
+
+            # Kill switch: close all positions and skip the rest of this cycle
+            if self._kill_switch_active:
+                self._log.error(
+                    "KILL SWITCH ACTIVE — closing all open positions, halting new trades"
+                )
+                self._close_all_positions_kill_switch()
+                return
+
             self._log.info(
                 "--- Main cycle | balance=€{:.2f} | positions={}",
                 self.paper_trader.balance_eur,
@@ -880,6 +894,46 @@ class Orchestrator:
     # =====================================================
     # Helpers
     # =====================================================
+
+    def _close_all_positions_kill_switch(self) -> None:
+        """Immediately closes all open positions when the kill switch is activated."""
+        open_positions = list(self.paper_trader.open_positions)
+        if not open_positions:
+            self._log.info("Kill switch: no open positions to close")
+            return
+
+        self._log.warning(
+            "Kill switch: closing {} open position(s)", len(open_positions)
+        )
+        for position in open_positions:
+            try:
+                # Fetch current price from the CLOB if available; fall back to entry price
+                current_price = position.entry_price
+                try:
+                    price_map = self.clob_client.fetch_midpoints([position.token_id])
+                    fetched = price_map.get(position.token_id)
+                    if fetched is not None:
+                        current_price = fetched
+                except Exception:
+                    pass
+
+                closed = self.paper_trader.close_position(
+                    trade_id=position.trade_id,
+                    current_market_price=current_price,
+                    reason=CloseReason.KILL_SWITCH,
+                    notes="Kill switch activated from dashboard",
+                )
+                if closed:
+                    self._log.info(
+                        "Kill switch: closed trade={} pnl={:.2%}",
+                        position.trade_id[:8],
+                        closed.pnl_pct or 0,
+                    )
+            except Exception as exc:
+                self._log.error(
+                    "Kill switch: failed to close trade={}: {}",
+                    position.trade_id[:8], exc
+                )
 
     def _build_price_map(self, markets) -> dict[str, float]:
         """Builds {token_id: price} for active markets."""

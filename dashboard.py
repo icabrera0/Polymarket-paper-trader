@@ -817,6 +817,24 @@ def render_sidebar(config, history: list, open_pos: list) -> tuple[int, int]:
             unsafe_allow_html=True,
         )
 
+        # ── Kill Switch ──────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### Emergency Controls")
+
+        _kill_active = bool(_read_override("kill_switch_active", False))
+
+        if _kill_active:
+            st.sidebar.error("🛑 KILL SWITCH ACTIVE — Bot halted, closing positions")
+            if st.sidebar.button("Resume Trading", type="secondary"):
+                _write_override("kill_switch_active", False)
+                st.sidebar.success("Kill switch deactivated. Bot will resume on next cycle.")
+                st.rerun()
+        else:
+            if st.sidebar.button("⚡ Emergency Stop — Close All Positions", type="primary"):
+                _write_override("kill_switch_active", True)
+                st.sidebar.error("Kill switch activated. Bot will close all positions on next cycle.")
+                st.rerun()
+
     return refresh, max_pos
 
 
