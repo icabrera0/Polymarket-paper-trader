@@ -751,7 +751,7 @@ def render_sidebar(config, history: list, open_pos: list) -> tuple[int, int]:
                 "max_simultaneous_positions", config.risk.max_simultaneous_positions
             )
         max_pos = st.slider(
-            "⚖ Max positions", min_value=1, max_value=10, step=1,
+            "⚖ Max positions", min_value=1, max_value=15, step=1,
             key="max_pos_slider",
         )
         if max_pos != config.risk.max_simultaneous_positions:
