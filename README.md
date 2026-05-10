@@ -53,16 +53,20 @@ Every 5 minutes the bot scans live markets, fetches fresh news, and makes decisi
 ## Features
 
 - **Multi-source news ingestion** — NewsAPI, GDELT (no key required), and Telegram public channels via Telethon MTProto. Fuzzy deduplication prevents analyzing the same story twice.
-- **LLM-powered analysis** — Structured JSON prompts ask the model for: consensus YES probability, price edge, sentiment score, impact magnitude, recommendation, and timeframe. Supports both Anthropic Claude (API) and Ollama (local, free).
+- **3-agent LLM panel** — Three independent agents (Quant, Domain Expert, Adversarial) each estimate YES probability, then a Synthesis agent reconciles their views. Computes panel standard deviation, mispricing Z-score `(p_model − p_market) / σ`, and expected value `EV = p·b − (1−p)` for every signal.
+- **LLM analysis monitor** — Run `python llm_monitor.py` in a second terminal to watch every agent call live: per-agent probability, edge, token usage, synthesis output, and post-mortem stream — all updated every 2 seconds via a Rich TUI.
 - **Market scanning** — Polls the Polymarket Gamma + CLOB APIs; filters out low-volume, wide-spread, or near-expiry markets. Parallel processing for speed.
-- **Decision engine** — Computes trade size as a fraction of the Kelly criterion. Detects duplicate/opposite open positions, applies low-info mode with stricter thresholds.
-- **Risk management** — Position size cap, max simultaneous positions, stop-loss, take-profit, max drawdown with optional auto-pause. Three time-based exit tiers prevent slots from being locked indefinitely.
+- **Kelly Criterion sizing** — Position size = `balance × min(f_kelly, 5%)` where `f_kelly = f_full × 0.25` (quarter Kelly). Negative-edge trades (`f_full ≤ 0`) are blocked automatically.
+- **Value at Risk check** — Parametric VaR at 95% confidence (`1.645 × σ × size`). Rejects any trade whose 1-day VaR exceeds 5% of current balance.
+- **Slippage guard** — Before executing, compares the current token price against the signal price. Aborts if drift exceeds 2% (configurable).
+- **Kill switch** — Dashboard "Emergency Stop" button writes to `data/overrides.json`; the bot closes all open positions on its next cycle and halts new trades until deactivated.
+- **Brier score tracking** — `predicted_prob` (model consensus) flows from analysis → decision → position → post-mortem. `actual_outcome` is inferred from exit price for resolved markets, enabling calibrated Brier score computation.
 - **Sports in-play mode** — Optional separate sub-strategy for live sports markets with its own size and confidence limits.
 - **Backtester** — Runs the full pipeline against already-resolved Polymarket markets. Two modes: `current` (today's news, fast calibration) and `replay` (historical GDELT news, realistic).
-- **Streamlit dashboard** — Real-time view of balance curve, open positions, P&L per trade, LLM decision log, and manual override controls.
+- **Streamlit dashboard** — Real-time view of balance curve, open positions, P&L per trade, LLM decision log, manual override controls, and emergency kill switch.
 - **Excel reports** — Daily `.xlsx` with 5 sheets: Executive Summary, Detailed Trades, LLM Analyses, Decisions Log, Balance Curve.
 - **Discord notifications** — Rich embeds for trade open/close, stop-loss trigger, drawdown alert, bot pause/resume, and daily summary.
-- **Full test suite** — pytest with unit tests for all major modules and integration fixtures.
+- **Full test suite** — 292 pytest tests covering all major modules and integration fixtures.
 
 ---
 
@@ -131,18 +135,22 @@ Defaults calibrated for a **€150** starting bankroll — fully adjustable in `
 
 | Parameter | Default | Description |
 |---|---|---|
-| Max position size | 15% of balance | ~€22 per trade |
-| Max open positions | 3 | |
+| Position sizing | Quarter Kelly | `f_kelly = f_full × 0.25`, hard cap at 5% of balance |
+| Max position size cap | 5% of balance | Hard ceiling over Kelly output (~€7.50) |
+| Max open positions | 15 | |
 | Min trade size | €5 | Below this the trade is skipped |
+| Min price edge | 4% | Minimum `\|p_model − p_market\|` to consider a trade |
+| VaR limit | 5% of balance/day | Parametric 95% CI; rejects oversized trades |
+| Slippage guard | 2% | Aborts trade if price drifted since signal |
 | Stop loss | −20% of entry | Automatic close |
 | Take profit | +30% | Evaluated on each cycle |
 | Max drawdown | 30% | Bot auto-pauses (configurable) |
 | Min 24h market volume | $10,000 | Liquidity filter |
 | Max bid/ask spread | 5 cents | Efficiency filter |
-| Min price edge | 10% | Minimum gap between price and inferred probability |
 | Time exit — tier 1 | 24 h | Tighten TP to +15% |
 | Time exit — tier 2 | 48 h | Close immediately if profitable |
 | Time exit — tier 3 | 72 h | Unconditional close |
+| Kill switch | Dashboard button | Closes all positions immediately, halts new trades |
 
 ---
 
@@ -150,7 +158,8 @@ Defaults calibrated for a **€150** starting bankroll — fully adjustable in `
 
 ```
 ├── main.py                  # Entry point
-├── dashboard.py             # Streamlit dashboard
+├── dashboard.py             # Streamlit dashboard (includes kill switch)
+├── llm_monitor.py           # Rich TUI — live view of every LLM agent call
 ├── dev_runner.py            # Hot-reload wrapper for development
 ├── config/
 │   └── settings.yaml        # All tuneable parameters
