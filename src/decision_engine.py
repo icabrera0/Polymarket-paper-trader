@@ -143,6 +143,12 @@ class DecisionEngine:
         # 4) Determine trade side
         side, token_id, entry_price = self._resolve_side_and_token(analysis)
 
+        # Compute expected value and store on analysis object
+        p = analysis.consensus_probability_yes
+        b = (1.0 / entry_price) - 1.0   # net decimal odds
+        ev = p * b - (1.0 - p)
+        analysis.expected_value = round(ev, 4)
+
         # 5) Anti-duplication: is there already an open position in this market?
         for pos in open_positions:
             if pos.token_id != token_id and self._same_market(pos, analysis):
@@ -206,6 +212,7 @@ class DecisionEngine:
         rationale = (
             f"LLM={analysis.recommendation.value}, "
             f"edge={analysis.edge:+.3f}, "
+            f"EV={analysis.expected_value:+.3f}, "
             f"confidence={analysis.confidence}/100, "
             f"size={final_size:.2f}€ "
             f"(SL={sl:.3f}, TP={tp:.3f})"

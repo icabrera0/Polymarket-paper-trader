@@ -434,3 +434,48 @@ class TestEvaluateOpenPosition:
         # Price within levels, no new info → does not close
         decision = engine.evaluate_open_position(position, current_price=0.42)
         assert not decision.should_close
+
+
+# =====================================================
+# Expected Value
+# =====================================================
+
+
+def test_expected_value_computed_for_buy_signal(config):
+    """decide() should populate analysis.expected_value for BUY signals."""
+    from src.decision_engine import DecisionEngine
+    from src.risk_manager import RiskManager
+    from src.models import (
+        MarketAnalysis, TradeRecommendation, DecisionAction
+    )
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    engine = DecisionEngine(config, rm)
+
+    # p=0.70, entry_price (YES) = 0.50 → b = (1/0.50)-1 = 1.0
+    # EV = 0.70 * 1.0 - 0.30 = 0.40
+    analysis = MarketAnalysis(
+        market_id="m-ev",
+        market_question="Will EV work?",
+        yes_token_id="yes-ev",
+        no_token_id="no-ev",
+        current_yes_price=0.50,
+        current_no_price=0.50,
+        consensus_probability_yes=0.70,
+        edge=0.20,
+        confidence=75,
+        sentiment_score=0.5,
+        impact_score=60.0,
+        recommendation=TradeRecommendation.BUY_YES,
+    )
+
+    decision = engine.decide(
+        analysis,
+        current_balance_eur=150.0,
+        open_positions=[],
+        articles=[make_article()],
+    )
+    assert decision.action == DecisionAction.OPEN_TRADE, f"Expected OPEN_TRADE, got {decision.action}: {decision.rationale}"
+    assert abs(analysis.expected_value - 0.40) < 1e-4, (
+        f"expected_value={analysis.expected_value}, expected ~0.40"
+    )
