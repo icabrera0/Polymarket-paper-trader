@@ -57,6 +57,13 @@ class RiskConfig(BaseModel):
     time_tighten_tp_pct: float = Field(default=0.15, gt=0)     # tightened TP threshold
     time_exit_profit_hours: float = Field(default=48.0, gt=0)  # after Nh, close if P&L >= 0
     time_exit_hard_hours: float = Field(default=72.0, gt=0)    # after Nh, close unconditionally
+    # Kelly Criterion position sizing
+    kelly_fraction: float = Field(default=0.25, gt=0, le=1)
+    # Value at Risk (VaR) check — 95% confidence, 1-day horizon
+    var_daily_limit_pct: float = Field(default=0.05, gt=0, le=1)
+    var_sigma_assumption: float = Field(default=0.30, gt=0, le=1)
+    # Slippage guard: abort trade if price drifted more than this from signal price
+    max_slippage_pct: float = Field(default=0.02, gt=0, le=1)
 
 
 class MarketFiltersConfig(BaseModel):
@@ -70,6 +77,7 @@ class MarketFiltersConfig(BaseModel):
     min_volume_usd: float = Field(default=5000.0, ge=0)
     min_hours_to_close: float = Field(default=12.0, ge=0)
     max_spread_cost: float = Field(default=0.06, ge=0, le=1)
+    min_edge_for_trade: float = Field(default=0.04, gt=0, le=1)
 
 
 class NewsApiConfig(BaseModel):

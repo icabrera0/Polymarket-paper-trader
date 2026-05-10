@@ -47,6 +47,7 @@ class CloseReason(str, Enum):
     NEWS_REVERSAL = "NEWS_REVERSAL"
     MARKET_RESOLVED = "MARKET_RESOLVED"
     TIME_EXIT = "TIME_EXIT"
+    KILL_SWITCH = "KILL_SWITCH"
 
 
 class RejectReason(str, Enum):
@@ -58,6 +59,7 @@ class RejectReason(str, Enum):
     SIZE_ABOVE_MAX = "SIZE_ABOVE_MAX"
     INSUFFICIENT_BALANCE = "INSUFFICIENT_BALANCE"
     INVALID_PRICE = "INVALID_PRICE"
+    VAR_LIMIT_EXCEEDED = "VAR_LIMIT_EXCEEDED"
 
 
 class NewsSource(str, Enum):
@@ -121,6 +123,7 @@ class Position(BaseModel):
     entry_reason: str = ""
     exit_reason_text: str = ""
     confidence: int = Field(default=0, ge=0, le=100)
+    predicted_prob: float = 0.0          # consensus_probability_yes at entry (for Brier score)
 
     def current_pnl_pct(self, current_price: float) -> float:
         """Percentage P&L on the price of the token we hold."""
@@ -343,6 +346,11 @@ class MarketAnalysis(BaseModel):
     # Low-info mode: analysis performed with fewer news articles than usual.
     # The DECISION_ENGINE will apply stricter thresholds and reduced sizing.
     is_low_info: bool = False
+
+    # Probability quality metrics (populated by _run_panel)
+    panel_std_dev: float = 0.0           # std dev of the 3 panel agent probabilities
+    mispricing_z_score: float = 0.0      # (p_model - p_market) / panel_std_dev
+    expected_value: float = 0.0          # EV = p * (1/entry_price - 1) - (1-p)
 
     # Metadata
     analyzed_at: datetime = Field(default_factory=_now_utc)

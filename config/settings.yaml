@@ -27,8 +27,8 @@ paper_trading:
 # Risk management (CRITICAL - calibrated for €150)
 # ---------------------------------------------------
 risk:
-  max_position_size_pct: 0.15          # 15% of balance per trade (~€22)
-  max_simultaneous_positions: 3
+  max_position_size_pct: 0.05          # was 0.15 — now hard cap over Kelly output
+  max_simultaneous_positions: 15        # was 3
   min_trade_size_eur: 5.0              # Below this, discard
   max_drawdown_pct: 0.30               # 30% loss from INITIAL balance → alert
   stop_loss_pct: 0.20                  # -20% of entry value
@@ -45,6 +45,11 @@ risk:
   time_exit_profit_hours: 48
   # Tier 3: after 72h, unconditional close (capital recycling, even at loss)
   time_exit_hard_hours: 72
+  # --- Kelly Criterion + VaR + Slippage (Feature 3) ---
+  kelly_fraction: 0.25                  # 0.25 = quarter Kelly; 0.5 = half Kelly
+  var_daily_limit_pct: 0.05             # max 5% of balance at VaR risk per day
+  var_sigma_assumption: 0.30            # assumed daily volatility of prediction tokens
+  max_slippage_pct: 0.02                # abort trade if price drifted >2% since signal
 
 # ---------------------------------------------------
 # Market filters (which markets are tradeable)
@@ -60,6 +65,7 @@ market_filters:
   min_volume_usd: 10000                # Same as min_volume_24h_usd — independently tuneable
   min_hours_to_close: 12               # Skip markets closing in <12h (gap-risk protection)
   max_spread_cost: 0.06                # Skip if 1 - yes_price - no_price > 0.06 (illiquid)
+  min_edge_for_trade: 0.04              # minimum |p_model - p_market| to consider trading
 
 # ---------------------------------------------------
 # News sources
