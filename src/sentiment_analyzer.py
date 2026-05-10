@@ -28,10 +28,12 @@ The DECISION_ENGINE (next module) will decide whether to act on it.
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -66,6 +68,10 @@ MAX_FRESH_AGE_HOURS = 48.0
 # shows 5% edges are within noise. A 10% edge is the minimum for a real
 # inefficiency.
 MIN_EDGE_FOR_TRADE = 0.10
+
+# Append-only JSONL file for LLM trace events (PANEL_START, AGENT_RESULT,
+# SYNTHESIS_RESULT). Can be patched in tests.
+TRACE_FILE = Path("logs/llm_trace.jsonl")
 
 
 # =====================================================
@@ -484,6 +490,24 @@ class SentimentAnalyzer:
         self._log = logger.bind(module="sentiment_analyzer")
 
     # =====================================================
+    # Trace emission
+    # =====================================================
+
+    def _emit_trace(self, event_type: str, data: dict) -> None:
+        """Appends a structured trace event to TRACE_FILE. Non-fatal."""
+        try:
+            TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": event_type,
+                **data,
+            }
+            with TRACE_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            self._log.warning("trace emit failed (non-fatal): {}", exc)
+
+    # =====================================================
     # Public API
     # =====================================================
 
@@ -868,6 +892,21 @@ class SentimentAnalyzer:
         order = {name: i for i, (name, _) in enumerate(agent_specs)}
         panel_results.sort(key=lambda x: order.get(x[0], 99))
 
+        # Emit AGENT_RESULT for each panel agent
+        for name, parsed, meta in panel_results:
+            self._emit_trace("AGENT_RESULT", {
+                "market_id": market.market_id,
+                "agent": name,
+                "succeeded": parsed.get("confidence", 0) > 0,
+                "recommendation": parsed.get("recommendation", "WAIT"),
+                "confidence": parsed.get("confidence", 0),
+                "probability": round(float(parsed.get("consensus_probability_yes", market.yes_price)), 4),
+                "edge": round(float(parsed.get("consensus_probability_yes", market.yes_price)) - market.yes_price, 4),
+                "justification_excerpt": str(parsed.get("justification", ""))[:200],
+                "input_tokens": meta.get("input_tokens", 0),
+                "output_tokens": meta.get("output_tokens", 0),
+            })
+
         panel_input_tokens  = sum(m.get("input_tokens", 0)  for _, _, m in panel_results)
         panel_output_tokens = sum(m.get("output_tokens", 0) for _, _, m in panel_results)
 
@@ -942,6 +981,16 @@ class SentimentAnalyzer:
         raw_summary = str(synth_parsed.get("summary", ""))[:450]
         summary_with_prefix = (panel_prefix + raw_summary)[:500]
 
+        # Emit SYNTHESIS_RESULT trace event
+        self._emit_trace("SYNTHESIS_RESULT", {
+            "market_id": market.market_id,
+            "final_recommendation": synth_parsed.get("recommendation", "WAIT"),
+            "final_confidence": int(synth_parsed.get("confidence", 0)),
+            "final_probability": round(consensus, 4),
+            "rules_triggered": str(synth_parsed.get("justification", ""))[:300],
+            "total_tokens": total_input + total_output,
+        })
+
         return MarketAnalysis(
             market_id=market.market_id,
             market_question=market.question,
@@ -975,12 +1024,30 @@ class SentimentAnalyzer:
         """Routes to the panel path. Falls back to single-agent if panel fails entirely."""
         user_prompt = build_user_prompt(market, articles)
         # Inject relevant KB lessons if the compound engine is available
+        kb_lessons_text: list[str] = []
+        kb_count = 0
         if self.compound is not None:
             lessons = self.compound.get_relevant_lessons(
                 market.question, market.slug
             )
             if lessons:
                 user_prompt = user_prompt + "\n\n" + lessons
+                kb_lessons_text = [
+                    line.strip() for line in lessons.splitlines()
+                    if line.strip().startswith("[")
+                ]
+                kb_count = len(kb_lessons_text)
+
+        # Emit PANEL_START trace event
+        self._emit_trace("PANEL_START", {
+            "market_id": market.market_id,
+            "market_question": market.question[:120],
+            "yes_price": market.yes_price,
+            "no_price": market.no_price,
+            "num_articles": len(articles),
+            "kb_lessons_injected": kb_count,
+            "kb_lessons": kb_lessons_text[:5],
+        })
 
         return self._run_panel(market, articles, user_prompt)
 

@@ -40,8 +40,20 @@ from src.models import (
 
 OUTCOMES_FILE = Path("data/llm_outcomes.jsonl")
 REPORT_FILE = Path("data/llm_report.md")
+_TRACE_FILE = Path("logs/llm_trace.jsonl")
 
 DRAWDOWN_GUARD_PCT = 0.08  # Block new trades if drawdown > 8%
+
+
+def _emit_compound_trace(event_type: str, data: dict) -> None:
+    """Appends a structured trace event to the LLM trace file. Non-fatal."""
+    try:
+        _TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        record = {"ts": datetime.now(timezone.utc).isoformat(), "event": event_type, **data}
+        with _TRACE_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 _POST_MORTEM_SYSTEM = (
     "You are a quantitative trading analyst reviewing closed paper trades on "
@@ -141,6 +153,17 @@ class CompoundEngine:
             pm.pnl_pct,
             pm.lesson[:60],
         )
+
+        _emit_compound_trace("POST_MORTEM", {
+            "trade_id": pm.trade_id,
+            "market_slug": pm.market_slug,
+            "side": position.side.value,
+            "pnl_pct": round(pm.pnl_pct, 4),
+            "failure_category": pm.failure_category.value,
+            "lesson": pm.lesson[:150],
+            "close_reason": position.close_reason.value if position.close_reason else "",
+        })
+
         return pm
 
     # =====================================================

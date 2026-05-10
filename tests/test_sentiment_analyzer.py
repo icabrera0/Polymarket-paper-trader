@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -528,3 +529,58 @@ class TestJsonExtractor:
 
     def test_json_invalido_devuelve_none(self):
         assert LLMClient.extract_json("{not valid json}") is None
+
+
+# =====================================================
+# LLM Trace emission
+# =====================================================
+
+
+def test_trace_emits_panel_start_event(config, tmp_path):
+    """_call_llm() should emit a PANEL_START event to the trace file."""
+    trace_file = tmp_path / "llm_trace.jsonl"
+
+    with patch("src.sentiment_analyzer.TRACE_FILE", trace_file):
+        from src.sentiment_analyzer import SentimentAnalyzer
+        from src.models import MarketSnapshot, TradeRecommendation, Timeframe, MarketAnalysis
+        from datetime import datetime, timezone
+
+        market = MarketSnapshot(
+            market_id="mkt-001",
+            question="Will X happen?",
+            yes_token_id="yes-tok",
+            no_token_id="no-tok",
+            yes_price=0.60,
+            no_price=0.40,
+            spread=0.01,
+            volume_24h_usd=50000,
+            volume_total_usd=100000,
+            liquidity_usd=20000,
+        )
+
+        analyzer = SentimentAnalyzer(config)
+
+        # Patch _run_panel to avoid real LLM
+        with patch.object(analyzer, "_run_panel", return_value=MarketAnalysis(
+            market_id="mkt-001",
+            market_question="Will X happen?",
+            yes_token_id="yes-tok",
+            no_token_id="no-tok",
+            current_yes_price=0.60,
+            current_no_price=0.40,
+            consensus_probability_yes=0.60,
+            edge=0.0,
+            confidence=0,
+            sentiment_score=0.0,
+            impact_score=0.0,
+            recommendation=TradeRecommendation.WAIT,
+        )):
+            analyzer._call_llm(market, [])
+
+    # Read trace file and find PANEL_START
+    lines = trace_file.read_text().splitlines()
+    events = [json.loads(line) for line in lines if line.strip()]
+    panel_starts = [e for e in events if e["event"] == "PANEL_START"]
+    assert len(panel_starts) == 1
+    assert panel_starts[0]["market_id"] == "mkt-001"
+    assert "num_articles" in panel_starts[0]
