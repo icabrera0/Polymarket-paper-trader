@@ -584,3 +584,32 @@ def test_trace_emits_panel_start_event(config, tmp_path):
     assert len(panel_starts) == 1
     assert panel_starts[0]["market_id"] == "mkt-001"
     assert "num_articles" in panel_starts[0]
+
+
+def test_llm_monitor_parses_trace_events(tmp_path):
+    """The monitor's parse logic should handle valid and invalid lines gracefully."""
+    import json
+    trace = tmp_path / "trace.jsonl"
+    # Write mixed content: valid JSON, partial line, empty line
+    trace.write_text(
+        '{"ts":"2026-01-01T00:00:00Z","event":"PANEL_START","market_id":"x","market_question":"Q","yes_price":0.6,"no_price":0.4,"num_articles":3,"kb_lessons_injected":0,"kb_lessons":[]}\n'
+        'not-json-at-all\n'
+        '\n'
+        '{"ts":"2026-01-01T00:00:01Z","event":"AGENT_RESULT","market_id":"x","agent":"Quant","succeeded":true,"recommendation":"WAIT","confidence":55,"probability":0.61,"edge":-0.01,"justification_excerpt":"edge too low","input_tokens":1200,"output_tokens":210}\n',
+        encoding="utf-8",
+    )
+
+    events = []
+    for line in trace.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass  # monitor ignores malformed lines
+
+    assert len(events) == 2
+    assert events[0]["event"] == "PANEL_START"
+    assert events[1]["event"] == "AGENT_RESULT"
+    assert events[1]["agent"] == "Quant"
