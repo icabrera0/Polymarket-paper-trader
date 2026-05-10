@@ -18,8 +18,8 @@ Design:
    2. Do not open if there is already a position on the same market and same side.
    3. Cancel if there is already a position on the OPPOSITE side (would be contradictory).
    4. Final RiskManager.validate_new_trade().
-- Dynamic sizing: the base size is the RiskManager maximum, scaled down
-  by (confidence × |edge|). Higher confidence and higher edge → closer to the maximum.
+- Dynamic sizing: Kelly Criterion (fractional Kelly) with a hard cap at
+  max_position_size_pct. Negative Kelly fraction (no positive edge) blocks the trade.
 """
 
 from __future__ import annotations
@@ -49,11 +49,6 @@ MIN_CONFIDENCE_TO_OPEN = 60
 
 # Minimum absolute edge to open a trade.
 MIN_EDGE_TO_OPEN = 0.05
-
-# To size the position we use a "confidence factor" that ranges from 0 to 1.
-# If the LLM returns confidence=100 and |edge|>=0.30, the factor is 1.0 → maximum size.
-# If confidence=60 and |edge|=0.05, the factor is low → size near the minimum.
-EDGE_REFERENCE_FOR_FULL_SIZE = 0.30
 
 
 class DecisionEngine:
@@ -167,13 +162,24 @@ class DecisionEngine:
                 )
                 return self._no_trade(analysis, skip_reasons, rationale_parts)
 
-        # 6) Dynamic sizing (with reduction if low_info)
-        proposed_size_eur = self._calculate_position_size(
+        # 6) Dynamic sizing via Kelly Criterion
+        # Use the probability of the purchased token winning:
+        # BUY_YES → p = consensus_yes; BUY_NO → p = 1 - consensus_yes
+        p_token = (
+            analysis.consensus_probability_yes
+            if side == TradeSide.BUY_YES
+            else 1.0 - analysis.consensus_probability_yes
+        )
+        proposed_size_eur = self._calculate_kelly_position_size(
+            p=p_token,
+            entry_price=entry_price,
             current_balance_eur=current_balance_eur,
-            confidence=analysis.confidence,
-            edge=analysis.edge,
             is_low_info=analysis.is_low_info,
         )
+        if proposed_size_eur == 0.0:
+            skip_reasons.append(SkipReason.LLM_RECOMMENDS_WAIT)
+            rationale_parts.append("Kelly fraction is zero or negative — no positive edge")
+            return self._no_trade(analysis, skip_reasons, rationale_parts)
 
         # 7) Final RiskManager validation
         risk_check = self.risk_manager.validate_new_trade(
@@ -321,41 +327,38 @@ class DecisionEngine:
             f"{analysis.recommendation}"
         )
 
-    def _calculate_position_size(
+    def _calculate_kelly_position_size(
         self,
+        p: float,
+        entry_price: float,
         current_balance_eur: float,
-        confidence: int,
-        edge: float,
         is_low_info: bool = False,
     ) -> float:
-        """Dynamic sizing: (confidence × edge) factor applied to the maximum allowed.
+        """Kelly Criterion position sizing with fractional Kelly and hard cap.
 
-        If is_low_info=True, applies the multiplier from config.decision to
-        further reduce the size (typically 50%).
+        Formula:
+            b = (1 / entry_price) - 1          net decimal odds on a binary token
+            f_full = (p * b - (1-p)) / b       full Kelly fraction
+            f_kelly = f_full * kelly_fraction   fractional Kelly (default: quarter Kelly)
+            size = balance * clamp(f_kelly, 0, max_position_pct)
 
-        Always guarantees at least the RiskManager's minimum trade size.
-        At most, the maximum allowed position size.
+        Returns 0.0 when f_full <= 0 (negative edge — trade is unprofitable in expectation).
         """
-        max_size = self.risk_manager.calculate_max_position_size(current_balance_eur)
-        min_size = self.risk_manager.risk.min_trade_size_eur
+        b = (1.0 / entry_price) - 1.0
+        q = 1.0 - p
+        f_full = (p * b - q) / b
+        if f_full <= 0:
+            return 0.0
 
-        # Confidence factor: 0 when confidence=0, 1 when confidence=100
-        confidence_factor = confidence / 100.0
-        # Edge factor: 0 when edge=0, 1 when |edge| >= EDGE_REFERENCE
-        edge_factor = min(1.0, abs(edge) / EDGE_REFERENCE_FOR_FULL_SIZE)
-        # Combination: product. If either is low, the size drops significantly.
-        sizing_factor = confidence_factor * edge_factor
+        kelly_frac = self.config.risk.kelly_fraction
+        max_pct = self.config.risk.max_position_size_pct
+        f_applied = min(f_full * kelly_frac, max_pct)
 
-        # Additional reduction for low_info mode
         if is_low_info:
-            low_info_mult = self.config.decision.low_info_size_multiplier
-            sizing_factor *= low_info_mult
-            self._log.debug(
-                "Sizing low_info: applying multiplier {:.2f}", low_info_mult
-            )
+            f_applied *= self.config.decision.low_info_size_multiplier
 
-        proposed = max_size * sizing_factor
-        return max(min_size, proposed)
+        size = current_balance_eur * f_applied
+        return max(self.risk_manager.risk.min_trade_size_eur, size)
 
     @staticmethod
     def _same_market(position: Position, analysis: MarketAnalysis) -> bool:

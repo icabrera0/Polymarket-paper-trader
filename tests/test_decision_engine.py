@@ -256,15 +256,16 @@ class TestAntiDuplication:
 
 
 class TestSizing:
-    def test_mayor_confianza_mayor_tamano(self, engine):
-        # Same edge, different confidence → more confidence, larger size
+    def test_kelly_size_independent_of_confidence(self, engine):
+        # Kelly sizing depends on p and entry_price, not on confidence.
+        # Same probability + same price → same size regardless of confidence level.
         a_low = make_analysis(yes_price=0.40, consensus=0.60, confidence=60)
         a_hi = make_analysis(yes_price=0.40, consensus=0.60, confidence=100)
         d_low = engine.decide(a_low, 150.0, [], articles=[make_article()])
         d_hi = engine.decide(a_hi, 150.0, [], articles=[make_article()])
         assert d_low.action == DecisionAction.OPEN_TRADE
         assert d_hi.action == DecisionAction.OPEN_TRADE
-        assert d_hi.size_eur > d_low.size_eur
+        assert abs(d_hi.size_eur - d_low.size_eur) < 0.01
 
     def test_mayor_edge_mayor_tamano(self, engine):
         a_small = make_analysis(yes_price=0.40, consensus=0.50, confidence=80)  # edge 0.10
@@ -478,4 +479,75 @@ def test_expected_value_computed_for_buy_signal(config):
     assert decision.action == DecisionAction.OPEN_TRADE, f"Expected OPEN_TRADE, got {decision.action}: {decision.rationale}"
     assert abs(analysis.expected_value - 0.40) < 1e-4, (
         f"expected_value={analysis.expected_value}, expected ~0.40"
+    )
+
+
+# =====================================================
+# Kelly Criterion Position Sizing
+# =====================================================
+
+
+def test_kelly_size_correct_for_positive_edge(config):
+    """Kelly sizing: p=0.70, entry=0.50, balance=150, kelly_frac=0.25, max_pct=0.05."""
+    from src.decision_engine import DecisionEngine
+    from src.risk_manager import RiskManager
+
+    config.risk.kelly_fraction = 0.25
+    config.risk.max_position_size_pct = 0.05
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    engine = DecisionEngine(config, rm)
+
+    # b = (1/0.50) - 1 = 1.0; q = 0.30
+    # f_full = (0.70*1.0 - 0.30) / 1.0 = 0.40
+    # f_kelly = 0.40 * 0.25 = 0.10  → but capped at max_pct=0.05
+    # size = 150 * 0.05 = 7.50
+    size = engine._calculate_kelly_position_size(
+        p=0.70,
+        entry_price=0.50,
+        current_balance_eur=150.0,
+        is_low_info=False,
+    )
+    assert abs(size - 7.50) < 0.01, f"Expected 7.50, got {size}"
+
+
+def test_kelly_blocks_negative_edge(config):
+    """Kelly returns 0.0 when f_full <= 0 (p*b <= q), meaning no positive edge."""
+    from src.decision_engine import DecisionEngine
+    from src.risk_manager import RiskManager
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    engine = DecisionEngine(config, rm)
+
+    # p=0.30, entry=0.50 → b=1.0, f_full = (0.30*1 - 0.70)/1 = -0.40 (negative)
+    size = engine._calculate_kelly_position_size(
+        p=0.30,
+        entry_price=0.50,
+        current_balance_eur=150.0,
+        is_low_info=False,
+    )
+    assert size == 0.0, f"Expected 0.0 (negative edge blocked), got {size}"
+
+
+def test_kelly_low_info_applies_multiplier(config):
+    """Kelly size is halved in low_info mode."""
+    from src.decision_engine import DecisionEngine
+    from src.risk_manager import RiskManager
+
+    config.risk.kelly_fraction = 0.25
+    config.risk.max_position_size_pct = 0.10   # set higher so Kelly is binding constraint
+    config.decision.low_info_size_multiplier = 0.5
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    engine = DecisionEngine(config, rm)
+
+    # p=0.70, entry=0.50 → f_full=0.40, f_kelly=0.10, size=15.0
+    normal_size = engine._calculate_kelly_position_size(
+        p=0.70, entry_price=0.50, current_balance_eur=150.0, is_low_info=False
+    )
+    low_info_size = engine._calculate_kelly_position_size(
+        p=0.70, entry_price=0.50, current_balance_eur=150.0, is_low_info=True
+    )
+    assert abs(low_info_size - normal_size * 0.5) < 0.01, (
+        f"low_info={low_info_size}, normal={normal_size}"
     )
