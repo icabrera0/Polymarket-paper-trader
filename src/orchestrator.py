@@ -218,7 +218,6 @@ class Orchestrator:
             max_instances=1,
         )
 
-        self._scheduler.start()
         self._running = True
 
         # Start the price monitor as a daemon thread (10-second polling, no
@@ -232,16 +231,21 @@ class Orchestrator:
         _pm_thread.start()
 
         self._log.info(
-            "Scheduler started. Cycle every {}s, review every {}min, "
+            "Cycle every {}s, review every {}min, "
             "SL/TP monitor every 10s, report at {}",
             self.config.polymarket.scan_interval_seconds,
             self.config.decision.reevaluate_open_positions_minutes,
             report_time,
         )
 
-        # Run the first cycle immediately without waiting for the interval
+        # Run the first cycle immediately; start the scheduler only after it
+        # completes so the interval timer never fires while the initial run holds
+        # the cycle lock (avoids the "Previous cycle still running" spam).
         self._log.info("Running initial cycle...")
         self._run_main_cycle()
+
+        self._scheduler.start()
+        self._log.info("Scheduler started.")
 
         # Block on the main thread
         try:
@@ -319,10 +323,14 @@ class Orchestrator:
     def _run_main_cycle(self) -> None:
         """Main cycle: scan → news → analyze → decide → execute."""
         if not self._cycle_lock.acquire(blocking=False):
+            interval_s = self.config.polymarket.scan_interval_seconds
             self._log.warning(
-                "Previous cycle still running — skipping scheduler trigger"
+                "Previous cycle still running — skipping scheduler trigger "
+                "(cycle is taking longer than the {}s interval)",
+                interval_s,
             )
             return
+        _t_cycle_start = time.time()
         try:
             self._apply_overrides()
 
@@ -524,7 +532,19 @@ class Orchestrator:
             self._log.error("Error in main cycle: {}", exc, exc_info=True)
             self.notifications.notify_error("main_cycle", str(exc))
         finally:
+            elapsed = time.time() - _t_cycle_start
             self._cycle_lock.release()
+            if self._scheduler and self._scheduler.running:
+                job = self._scheduler.get_job("main_cycle")
+                if job and job.next_run_time:
+                    now = datetime.now(job.next_run_time.tzinfo)
+                    secs_until = max(0.0, (job.next_run_time - now).total_seconds())
+                    self._log.info(
+                        "Cycle finished in {:.1f}s — next at {} (in {:.0f}s)",
+                        elapsed,
+                        job.next_run_time.strftime("%H:%M:%S"),
+                        secs_until,
+                    )
 
     def _price_monitor_loop(self) -> None:
         """Daemon thread body: polls every 10 s while the bot is running."""
