@@ -2,23 +2,53 @@
 # Polymarket Paper Trading Bot - .gitignore
 # =====================================================
 
-# --- Secrets ---
+# --- Secrets & credentials ---
 .env
-.env.local
+.env.*
 *.key
 *.pem
+*.secret
+*.secrets
+*_secret*
+*_credentials*
+credentials.json
+service_account.json
+
+# --- Runtime data (entire directory — all runtime state lives here) ---
+# Covers: databases, session tokens, JSON stats, JSONL outcomes, reports, cache
+data/
+
+# --- Logs ---
+logs/
+
+# --- Reports ---
+reports/
 
 # --- Python ---
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
 *.egg-info/
 *.egg
+.Python
+build/
+dist/
+.installed.cfg
+
+# --- Test & coverage artifacts ---
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.prof
+
+# --- Type checking / linting caches ---
 .mypy_cache/
 .ruff_cache/
+.pyright/
 
 # --- Virtual environments ---
 venv/
@@ -26,62 +56,36 @@ venv/
 env/
 ENV/
 
-# --- Generated data & runtime state ---
-data/*.db
-data/*.db-journal
-data/*.db-shm
-data/*.db-wal
-data/*.sqlite
-data/*.sqlite3
-data/cache/
-data/overrides.json
-
-# --- Session tokens (sensitive — never commit) ---
-data/*.session
-data/*.session-journal
-
-# --- Logs ---
-logs/*.log
-logs/*.log.*
-
-# --- Reports ---
-reports/
-
-# --- Context & generated docs ---
-CONTEXT.md
-
-# --- Cache ---
-**/__pycache__/
-**/*.pyc
-.cache/
-*.cache
-
-# --- IDEs & tools ---
+# --- IDEs & editors ---
 .vscode/
 .idea/
-.claude/
-
-# --- Mulch (local expertise store — stays local) ---
-.mulch/
-node_modules/
-
-# --- Overstory (multi-agent scaffolding — local only) ---
-.overstory/
-package.json
-package-lock.json
-
-# --- Bundled archives ---
-files/
 *.swp
 *.swo
 *~
 
-# --- OS ---
+# --- Claude Code & local AI tooling ---
+.claude/
+.mulch/
+.overstory/
+
+# --- Node (if any tooling uses it) ---
+node_modules/
+package-lock.json
+package.json
+
+# --- Context & generated docs (local working notes) ---
+CONTEXT.md
+
+# --- OS artifacts ---
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# --- Temporary files ---
+# --- Temporary / backup files ---
 *.bak
 *.tmp
 *.old
+*.orig
+
+# --- Archives ---
+files/
