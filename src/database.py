@@ -762,6 +762,17 @@ class Database:
             self._log.error("get_closed_trades_in_window failed: {}", exc)
             return []
 
+    def get_recent_market_snapshots(self, limit: int = 100) -> list[dict]:
+        """Returns recent market snapshots from the database. Returns [] if table doesn't exist."""
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM market_snapshots ORDER BY snapshot_timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     def __enter__(self) -> "Database":
         return self
 

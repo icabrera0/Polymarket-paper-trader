@@ -138,6 +138,24 @@ class PaperTrader:
             )
             return None
 
+        # Slippage guard: abort if market price has drifted too far since analysis
+        max_slip = self.config.risk.max_slippage_pct
+        if max_slip > 0:
+            current_price = self._get_current_token_price(decision.token_id)
+            if current_price is not None:
+                signal_price = decision.entry_price
+                slippage = abs(current_price - signal_price) / signal_price
+                if slippage > max_slip:
+                    self._log.warning(
+                        "SLIPPAGE ABORT | token={} signal={:.4f} current={:.4f} drift={:.2%} > limit={:.2%}",
+                        decision.token_id[:12],
+                        signal_price,
+                        current_price,
+                        slippage,
+                        max_slip,
+                    )
+                    return None
+
         # Apply slippage to the entry price (pay more on BUY)
         effective_price = self._apply_buy_slippage(decision.entry_price)
 
@@ -302,6 +320,22 @@ class PaperTrader:
     # =====================================================
     # Helpers
     # =====================================================
+
+    def _get_current_token_price(self, token_id: str) -> Optional[float]:
+        """Returns the current market price for a token from the database snapshot cache.
+
+        Returns None if no recent snapshot is available (slippage check is skipped).
+        """
+        try:
+            snapshots = self.db.get_recent_market_snapshots(limit=100)
+            for snap in snapshots:
+                if snap.get("yes_token_id") == token_id:
+                    return float(snap["yes_price"])
+                if snap.get("no_token_id") == token_id:
+                    return float(snap["no_price"])
+        except Exception:
+            pass
+        return None
 
     def _apply_buy_slippage(self, market_price: float) -> float:
         """Buying costs more: effective price > market price."""

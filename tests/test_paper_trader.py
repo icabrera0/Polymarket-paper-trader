@@ -397,6 +397,90 @@ class TestIntegrationWithDecisionEngine:
         assert all_trades[0].trade_id == position.trade_id
 
 
+def test_slippage_guard_aborts_trade_on_excessive_drift(config):
+    """execute_decision() should return None when price drifted >max_slippage_pct since signal."""
+    from unittest.mock import MagicMock, patch
+    from src.paper_trader import PaperTrader
+    from src.risk_manager import RiskManager
+    from src.models import TradeDecision, DecisionAction, TradeSide
+
+    config.risk.max_slippage_pct = 0.02   # 2% threshold
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    mock_db = MagicMock()
+    mock_db.get_open_positions.return_value = []
+    mock_db.get_balance_history.return_value = []
+
+    trader = PaperTrader(config, rm, db=mock_db)
+    trader._balance_eur = 150.0
+
+    decision = TradeDecision(
+        action=DecisionAction.OPEN_TRADE,
+        market_id="m-slip",
+        market_question="Will slippage guard work?",
+        market_slug="will-slip-guard-work",
+        side=TradeSide.BUY_YES,
+        token_id="tok-slip",
+        entry_price=0.50,    # signal price at analysis time
+        size_eur=10.0,
+        stop_loss_price=0.40,
+        take_profit_price=0.65,
+        confidence=70,
+        edge=0.12,
+        rationale="test",
+    )
+
+    # Current market price has drifted 5% above signal price → above 2% threshold
+    drifted_price = 0.50 * 1.05   # 0.525
+
+    with patch.object(trader, "_get_current_token_price", return_value=drifted_price):
+        result = trader.execute_decision(decision)
+
+    assert result is None, "Expected None (slippage abort) but got a position"
+
+
+def test_slippage_guard_allows_trade_within_threshold(config):
+    """execute_decision() should proceed when price drift is within max_slippage_pct."""
+    from unittest.mock import MagicMock, patch
+    from src.paper_trader import PaperTrader
+    from src.risk_manager import RiskManager
+    from src.models import TradeDecision, DecisionAction, TradeSide
+
+    config.risk.max_slippage_pct = 0.02
+
+    rm = RiskManager(config, initial_balance_eur=150.0)
+    mock_db = MagicMock()
+    mock_db.get_open_positions.return_value = []
+    mock_db.get_balance_history.return_value = []
+
+    trader = PaperTrader(config, rm, db=mock_db)
+    trader._balance_eur = 150.0
+
+    decision = TradeDecision(
+        action=DecisionAction.OPEN_TRADE,
+        market_id="m-noslip",
+        market_question="No slippage test?",
+        market_slug="no-slippage",
+        side=TradeSide.BUY_YES,
+        token_id="tok-noslip",
+        entry_price=0.50,
+        size_eur=10.0,
+        stop_loss_price=0.40,
+        take_profit_price=0.65,
+        confidence=70,
+        edge=0.12,
+        rationale="test",
+    )
+
+    # 1% drift — within the 2% threshold
+    close_price = 0.50 * 1.01   # 0.505
+
+    with patch.object(trader, "_get_current_token_price", return_value=close_price):
+        result = trader.execute_decision(decision)
+
+    assert result is not None, "Expected a position but got None (incorrect slippage abort)"
+
+
 def test_execute_decision_sets_predicted_prob(config):
     """execute_decision() must populate position.predicted_prob from decision.predicted_prob."""
     from unittest.mock import MagicMock, patch
