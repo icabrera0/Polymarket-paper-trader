@@ -232,6 +232,7 @@ class DecisionEngine:
             take_profit_price=tp,
             confidence=analysis.confidence,
             edge=analysis.edge,
+            predicted_prob=analysis.consensus_probability_yes,
             rationale=rationale,
             analysis_id=analysis.market_id,  # placeholder
         )

@@ -163,6 +163,7 @@ class PaperTrader:
             status=TradeStatus.OPEN,
             entry_reason=decision.rationale,
             confidence=decision.confidence,
+            predicted_prob=decision.predicted_prob,
         )
 
         # Move money from balance to position

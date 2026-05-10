@@ -402,6 +402,7 @@ class TradeDecision(BaseModel):
 
     # Traceability
     edge: float = 0.0
+    predicted_prob: float = 0.0          # analysis consensus_probability_yes (for Brier score)
     skip_reasons: list[SkipReason] = Field(default_factory=list)
     rationale: str = ""
     analysis_id: str = ""              # To correlate with MarketAnalysis

@@ -123,8 +123,8 @@ class CompoundEngine:
             root_cause=(result.get("root_cause") or "")[:300],
             lesson=(result.get("lesson") or "")[:200],
             market_slug=position.market_slug,
-            predicted_prob=0.0,
-            actual_outcome=None,
+            predicted_prob=position.predicted_prob,
+            actual_outcome=self._infer_actual_outcome(position),
             pnl_pct=position.pnl_pct,
             time_held_hours=time_held_hours,
         )
@@ -354,6 +354,35 @@ class CompoundEngine:
         self._prune_knowledge_base()
         self._rebuild_report()
         self._log.info("Nightly consolidation complete")
+
+    # =====================================================
+    # Private: outcome inference
+    # =====================================================
+
+    def _infer_actual_outcome(self, position: "Position") -> Optional[bool]:
+        """Infers whether YES actually occurred based on the exit price.
+
+        Returns True if YES resolved, False if NO resolved, None if the position
+        was closed mid-market (SL/TP exit) and the resolution is unknown.
+
+        Price logic:
+          - BUY_YES token → 1.0 when YES resolved, 0.0 when NO resolved.
+          - BUY_NO  token → 1.0 when NO  resolved, 0.0 when YES resolved.
+        """
+        if position.exit_price is None:
+            return None
+        from src.models import TradeSide
+        if position.side == TradeSide.BUY_YES:
+            if position.exit_price >= 0.95:
+                return True    # YES token won → YES resolved
+            if position.exit_price <= 0.05:
+                return False   # YES token lost → NO resolved
+        else:  # BUY_NO
+            if position.exit_price >= 0.95:
+                return False   # NO token won → YES did NOT happen
+            if position.exit_price <= 0.05:
+                return True    # NO token lost → YES happened
+        return None            # SL/TP exit — no resolution data
 
     # =====================================================
     # Private: LLM call

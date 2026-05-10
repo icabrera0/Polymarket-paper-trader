@@ -501,3 +501,129 @@ class TestCategoryFallback:
             if result not in _VALID:
                 result = "general"
             assert result == cat
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Brier score pipeline: predicted_prob and actual_outcome
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_predicted_prob_is_not_zero_in_post_mortem(config, tmp_path):
+    """run_post_mortem() must set predicted_prob = position.predicted_prob, not 0.0."""
+    from unittest.mock import patch, MagicMock
+    from src.compound import CompoundEngine
+    from src.database import Database
+    from src.models import Position, TradeSide, CloseReason, TradeStatus
+    from datetime import datetime, timezone
+
+    db = Database(str(tmp_path / "test.db"))
+    engine = CompoundEngine(config, db)
+
+    position = Position(
+        market_question="Will X happen?",
+        market_slug="will-x-happen",
+        token_id="tok-yes",
+        side=TradeSide.BUY_YES,
+        entry_price=0.50,
+        size_eur=10.0,
+        size_usd=10.7,
+        tokens_quantity=21.4,
+        stop_loss_price=0.40,
+        take_profit_price=0.65,
+        status=TradeStatus.CLOSED,
+        exit_price=0.30,
+        exit_timestamp=datetime.now(timezone.utc),
+        close_reason=CloseReason.STOP_LOSS,
+        pnl_eur=-2.0,
+        pnl_pct=-0.40,
+        predicted_prob=0.72,    # ← set at trade entry
+    )
+
+    mock_llm_result = {
+        "failure_category": "BAD_PREDICTION",
+        "root_cause": "market moved against position",
+        "lesson": "avoid low-liquidity markets",
+        "market_pattern": "test-pattern",
+        "category": "general",
+    }
+
+    with patch.object(engine, "_call_llm_for_post_mortem", return_value=mock_llm_result):
+        with patch("src.compound._emit_compound_trace"):
+            pm = engine.run_post_mortem(position)
+
+    assert pm is not None
+    assert pm.predicted_prob == 0.72, f"predicted_prob={pm.predicted_prob}, expected 0.72"
+
+
+def test_actual_outcome_inferred_from_resolved_exit(config, tmp_path):
+    """_infer_actual_outcome() should return True when BUY_YES exit_price >= 0.95."""
+    from src.compound import CompoundEngine
+    from src.database import Database
+    from src.models import Position, TradeSide, CloseReason, TradeStatus
+    from datetime import datetime, timezone
+
+    db = Database(str(tmp_path / "test2.db"))
+    engine = CompoundEngine(config, db)
+
+    # BUY_YES position that resolved YES (exit_price = 0.99)
+    pos_yes_win = Position(
+        market_question="Will YES resolve?",
+        market_slug="will-yes-resolve",
+        token_id="tok-yes2",
+        side=TradeSide.BUY_YES,
+        entry_price=0.60,
+        size_eur=10.0,
+        size_usd=10.7,
+        tokens_quantity=17.8,
+        stop_loss_price=0.48,
+        take_profit_price=0.78,
+        status=TradeStatus.CLOSED,
+        exit_price=0.99,
+        exit_timestamp=datetime.now(timezone.utc),
+        close_reason=CloseReason.MARKET_RESOLVED,
+        pnl_eur=6.5,
+        pnl_pct=0.65,
+    )
+    assert engine._infer_actual_outcome(pos_yes_win) is True
+
+    # BUY_NO position that resolved NO (NO token went to 0.99 = YES did NOT happen)
+    pos_no_win = Position(
+        market_question="Will NO resolve?",
+        market_slug="will-no-resolve",
+        token_id="tok-no2",
+        side=TradeSide.BUY_NO,
+        entry_price=0.40,
+        size_eur=10.0,
+        size_usd=10.7,
+        tokens_quantity=26.75,
+        stop_loss_price=0.20,
+        take_profit_price=0.72,
+        status=TradeStatus.CLOSED,
+        exit_price=0.99,
+        exit_timestamp=datetime.now(timezone.utc),
+        close_reason=CloseReason.MARKET_RESOLVED,
+        pnl_eur=5.9,
+        pnl_pct=1.475,
+    )
+    assert engine._infer_actual_outcome(pos_no_win) is False
+
+    # SL exit — no resolution
+    pos_sl = Position(
+        market_question="SL exit?",
+        market_slug="sl-exit",
+        token_id="tok-sl",
+        side=TradeSide.BUY_YES,
+        entry_price=0.60,
+        size_eur=10.0,
+        size_usd=10.7,
+        tokens_quantity=17.8,
+        stop_loss_price=0.48,
+        take_profit_price=0.78,
+        status=TradeStatus.CLOSED,
+        exit_price=0.48,
+        exit_timestamp=datetime.now(timezone.utc),
+        close_reason=CloseReason.STOP_LOSS,
+        pnl_eur=-2.4,
+        pnl_pct=-0.20,
+    )
+    assert engine._infer_actual_outcome(pos_sl) is None
