@@ -212,18 +212,30 @@ class SocialIngestor:
         session_path = Path("data") / "telegram_social.session"
         session_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if not session_path.exists():
+            self._log.warning(
+                "Telegram social: no session file at '{}'. "
+                "Run the bot interactively once to authenticate.",
+                session_path,
+            )
+            return []
+
         cutoff = _utcnow() - timedelta(hours=cfg.max_age_hours)
         articles: list[NewsArticle] = []
 
         client = TelegramClient(str(session_path), api_id, api_hash)
         try:
-            await client.start()
+            await client.connect()
+            if not await client.is_user_authorized():
+                self._log.warning(
+                    "Telegram social: session expired or invalid. "
+                    "Delete {} and re-authenticate interactively.",
+                    session_path,
+                )
+                await client.disconnect()
+                return []
         except Exception as exc:
-            self._log.warning(
-                "Telegram social: could not start client ({}). "
-                "If this is the first run, run the bot interactively once to create a session.",
-                exc,
-            )
+            self._log.warning("Telegram social: could not connect ({})", exc)
             return []
 
         try:

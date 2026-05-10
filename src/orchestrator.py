@@ -244,6 +244,11 @@ class Orchestrator:
         self._log.info("Running initial cycle...")
         self._run_main_cycle()
 
+        if not self._running:
+            self.db.close()
+            self._log.info("Bot stopped cleanly.")
+            return
+
         self._scheduler.start()
         self._log.info("Scheduler started.")
 
@@ -255,6 +260,9 @@ class Orchestrator:
                 time.sleep(1)
         except KeyboardInterrupt:
             self._shutdown()
+        finally:
+            self.db.close()
+            self._log.info("Bot stopped cleanly.")
 
     def _handle_shutdown(self, signum, frame) -> None:
         self._log.info("Shutdown signal received ({}). Stopping bot...", signum)
@@ -268,9 +276,6 @@ class Orchestrator:
         self.notifications.send_text(
             f"🛑 **Bot stopped** | Final balance: €{self.paper_trader.balance_eur:.2f}"
         )
-        self.db.close()
-        self._log.info("Bot stopped cleanly.")
-        sys.exit(0)
 
     def _hot_reload(self) -> None:
         """Graceful restart triggered by dev_runner.py writing hot_reload.flag."""

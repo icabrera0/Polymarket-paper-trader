@@ -53,7 +53,12 @@ def _parse_events(lines: list[str]) -> list[dict]:
 
 
 class MonitorState:
-    """Holds the most recent state for each panel section."""
+    """Holds the most recent state for each panel section.
+
+    Uses per-market buffers so parallel analysis (llm_parallelism > 1) doesn't
+    overwrite agent results mid-flight.  Display switches to a market only when
+    its SYNTHESIS_RESULT arrives; until then the last completed market is shown.
+    """
 
     def __init__(self) -> None:
         self.market_question: str = "—"
@@ -61,45 +66,79 @@ class MonitorState:
         self.no_price: float = 0.0
         self.num_articles: int = 0
         self.kb_lessons: list[str] = []
-
-        # Agent results keyed by name
         self.agents: dict[str, dict] = {
             "Quant": {},
             "Domain": {},
             "Adversarial": {},
         }
-
         self.synthesis: dict = {}
         self.post_mortems: list[dict] = []
         self.last_updated: str = "—"
 
+        # Per-market buffers — keyed by market_id
+        self._buffers: dict[str, dict] = {}
+        # market_id currently shown in the UI
+        self._display_id: str = ""
+
     def apply(self, event: dict) -> None:
         kind = event.get("event", "")
         ts = event.get("ts", "")[:19].replace("T", " ")
-        self.last_updated = ts
+        mid = event.get("market_id", "")
 
         if kind == "PANEL_START":
-            self.market_question = event.get("market_question", "—")
-            self.yes_price = float(event.get("yes_price", 0))
-            self.no_price = float(event.get("no_price", 0))
-            self.num_articles = int(event.get("num_articles", 0))
-            self.kb_lessons = event.get("kb_lessons", [])
-            # Reset agents + synthesis for new market
-            for k in self.agents:
-                self.agents[k] = {}
-            self.synthesis = {}
+            self._buffers[mid] = {
+                "question": event.get("market_question", "—"),
+                "yes_price": float(event.get("yes_price", 0)),
+                "no_price": float(event.get("no_price", 0)),
+                "num_articles": int(event.get("num_articles", 0)),
+                "kb_lessons": event.get("kb_lessons", []),
+                "agents": {"Quant": {}, "Domain": {}, "Adversarial": {}},
+                "synthesis": {},
+                "ts": ts,
+                "done": False,
+            }
+            # First market ever — show it while waiting for agents
+            if not self._display_id:
+                self._display_id = mid
+                self._sync_display()
 
         elif kind == "AGENT_RESULT":
-            name = event.get("agent", "Unknown")
-            if name in self.agents:
-                self.agents[name] = event
+            if mid in self._buffers:
+                name = event.get("agent", "Unknown")
+                if name in self._buffers[mid]["agents"]:
+                    self._buffers[mid]["agents"][name] = event
+                self.last_updated = ts
+                if mid == self._display_id:
+                    self._sync_display()
 
         elif kind == "SYNTHESIS_RESULT":
-            self.synthesis = event
+            if mid in self._buffers:
+                self._buffers[mid]["synthesis"] = event
+                self._buffers[mid]["done"] = True
+                self._display_id = mid
+                self.last_updated = ts
+                self._sync_display()
+                # Prune old completed buffers
+                for k in [k for k, v in self._buffers.items() if v["done"] and k != mid]:
+                    del self._buffers[k]
 
         elif kind == "POST_MORTEM":
             self.post_mortems.insert(0, event)
             self.post_mortems = self.post_mortems[:MAX_POST_MORTEMS]
+
+    def _sync_display(self) -> None:
+        buf = self._buffers.get(self._display_id)
+        if not buf:
+            return
+        self.market_question = buf["question"]
+        self.yes_price = buf["yes_price"]
+        self.no_price = buf["no_price"]
+        self.num_articles = buf["num_articles"]
+        self.kb_lessons = buf["kb_lessons"]
+        self.agents = buf["agents"]
+        self.synthesis = buf["synthesis"]
+        if buf["ts"]:
+            self.last_updated = buf["ts"]
 
 
 def _agent_panel(name: str, data: dict) -> Panel:
