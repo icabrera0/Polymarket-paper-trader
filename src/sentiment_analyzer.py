@@ -295,7 +295,7 @@ YOUR MANDATE — before recommending any trade, you MUST find all of the followi
 
 DEFAULT BEHAVIOR: Recommend WAIT unless you CANNOT find a reasonable argument against the trade. The burden of proof is on the bull case.
 
-BUY SIGNAL PENALTY: If you would naturally assign a confidence of X to a BUY signal, output X - 15 instead. You are structurally skeptical of upside. Never exceed confidence of 65 on any BUY signal.
+BUY SIGNAL PENALTY: If you would naturally assign a confidence of X to a BUY signal, output X - 8 instead. You are structurally skeptical of upside. Never exceed confidence of 70 on any BUY signal.
 
 If you find no red flags at all after applying all 6 checks, you may recommend the trade — but only with the reduced confidence.
 
@@ -322,7 +322,7 @@ RULE 1 — WAIT MAJORITY: If 2 or more agents recommend WAIT or INSUFFICIENT_DAT
 
 RULE 2 — ADVERSARIAL VETO: If the Adversarial agent's confidence in a WAIT recommendation is 70 or higher, the final recommendation is WAIT, regardless of what the other two agents say.
 
-RULE 3 — TRADE CONSENSUS: If 2 or more agents agree on BUY_YES or BUY_NO, AND the average confidence of the agreeing agents is 65 or higher, proceed with that direction.
+RULE 3 — TRADE CONSENSUS: If 2 or more agents agree on BUY_YES or BUY_NO, AND the average confidence of the agreeing agents is 55 or higher, proceed with that direction.
 
 RULE 4 — PROBABILITY SYNTHESIS: Compute the final consensus_probability_yes as a weighted average:
   - Quant weight: 0.4
@@ -330,7 +330,7 @@ RULE 4 — PROBABILITY SYNTHESIS: Compute the final consensus_probability_yes as
   - Adversarial weight: 0.2
   weighted_avg = (quant_prob * 0.4) + (domain_prob * 0.4) + (adversarial_prob * 0.2)
 
-RULE 5 — CONFIDENCE SYNTHESIS: Final confidence = min(85, average_confidence_of_agreeing_agents - 5). The panel is always slightly more conservative than any individual agent. If no trade (WAIT), final confidence = 0.
+RULE 5 — CONFIDENCE SYNTHESIS: Final confidence = min(85, average_confidence_of_agreeing_agents - 2). The panel is always slightly more conservative than any individual agent. If no trade (WAIT), final confidence = 0.
 
 RULE 6 — FALLBACK: If none of the above rules produce a trade (no consensus on direction, or insufficient confidence), the final recommendation is WAIT.
 
